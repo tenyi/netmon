@@ -28,9 +28,16 @@
         <h1 class="page-title">事件歷史</h1>
         <p class="page-subtitle">查閱過去的斷線 / 恢復事件</p>
       </div>
-      <div class="header-status" id="header-status">
-        <span class="status-dot status-dot--online" aria-hidden="true"></span>
-        <span class="status-text" id="header-status-text">—</span>
+      <div class="header-actions">
+        <label class="switch" title="開啟時每 5 秒自動更新事件與連線狀態">
+          <input type="checkbox" id="auto-refresh" checked>
+          <span class="switch-slider" aria-hidden="true"></span>
+          <span class="switch-label">自動更新</span>
+        </label>
+        <div class="header-status" id="header-status">
+          <span class="status-dot status-dot--online" aria-hidden="true"></span>
+          <span class="status-text" id="header-status-text">—</span>
+        </div>
       </div>
     </section>
 
@@ -82,6 +89,7 @@
         </div>
         <div class="summary" id="events-summary" aria-live="polite"></div>
       </div>
+      <p class="last-updated" id="last-updated" hidden></p>
       <div class="table-wrap">
         <table class="events-table">
           <thead>

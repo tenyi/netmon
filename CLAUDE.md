@@ -124,6 +124,7 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 - `range.js` 提供共用的日期區間選擇器,透過 `netmon:rangechange` CustomEvent 通知;選擇同步到 URL query string 與 sessionStorage。
 - `dashboard.js` 每 **5 秒**輪詢 `/api/status` 更新即時狀態;區間資料於日期 chip 變更時重抓 `/api/events` (無 limit,算 KPI) + `/api/stats`,用 Chart.js 畫 latency / loss 兩張折線圖,並依區間自動挑 `granularity` (≤ 6h 無 / ≤ 1d 5m / ≤ 3d 15m / ≤ 7d 1h / 其他 4h)。
 - `events.js` 監聽日期 chip + 狀態 chip;抓 `/api/events?limit=25&offset=...` (前端每頁 25 筆),從 `X-Total-Count` 讀總數;**總筆數 < 25 時隱藏分頁器**;切換日期區間時自動回到第 1 頁。
+- `events.js` 抬頭右側有「自動更新」開關 (預設 ON),啟用時每 5 秒重抓 events + `/api/status`;偏好持久到 `localStorage["netmon:autoRefresh:events"]`,重整保留;卡片底部顯示「最後更新:N 秒前」並在超過 3 個週期未更新時變琥珀色提示過時。
 - 模板用 `html/template` + `gin.H` 注入 `Title`、`ActiveNav`。Template 檔案內容用 `{{define "dashboard.html"}}...{{end}}` 包裹,以便 `template.ParseFS` 載入。
 
 ## 跨平台注意事項

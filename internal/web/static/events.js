@@ -4,6 +4,8 @@
    - 額外支援狀態過濾:全部 / 進行中 / 已恢復 (前端過濾,僅作用於目前頁)
    - 分頁:每頁 25 筆,從 X-Total-Count 讀總數;總筆數 < 25 時隱藏分頁器
    - 切換日期區間或狀態時自動回到第 1 頁
+   - 自動更新開關:預設 ON,啟用時每 5 秒重抓 events + 抬頭 status;
+     偏好寫到 localStorage,重整保留
    ========================================================================= */
 (function () {
   "use strict";
@@ -65,8 +67,14 @@
   let currentRange = null;
   let statusFilter = "all";
   const PAGE_SIZE = 25;
+  const AUTO_REFRESH_MS = 5000;
+  const STALE_THRESHOLD_MS = AUTO_REFRESH_MS * 3; // 3 個週期沒更新視為過時
   let currentPage = 1;
   let totalCount = 0;
+  let lastUpdatedAt = 0;
+  let autoRefreshEnabled = true;
+  let autoRefreshTimer = null;
+  let staleTimer = null;
 
   // ---------- 表格 ----------
   function renderTable(events) {
@@ -210,16 +218,20 @@
     isFetching = true;
     try {
       const offset = (currentPage - 1) * PAGE_SIZE;
-      const { events, total } = await fetchEventsPage(
-        currentRange.from, currentRange.to, PAGE_SIZE, offset,
-      );
-      currentPageEvents = events;
-      totalCount = total;
-      renderTable(events);
+      const [page, status] = await Promise.all([
+        fetchEventsPage(currentRange.from, currentRange.to, PAGE_SIZE, offset),
+        paintHeader(),
+      ]);
+      currentPageEvents = page.events;
+      totalCount = page.total;
+      renderTable(page.events);
       renderSummary();
       renderPagination();
+      markUpdated();
       const subtitle = document.getElementById("events-subtitle");
       if (subtitle) subtitle.textContent = currentRange.label;
+      // 確保 paintHeader 沒有被優化掉
+      void status;
     } catch (e) {
       console.error("events refresh failed", e);
       const tbody = document.getElementById("events-body");
@@ -242,7 +254,7 @@
   async function paintHeader() {
     try {
       const res = await fetch("/api/status", { headers: { Accept: "application/json" } });
-      if (!res.ok) return;
+      if (!res.ok) return null;
       const s = await res.json();
       const gw = document.getElementById("header-gateway");
       if (gw) gw.textContent = s.gateway_ip || "—";
@@ -257,18 +269,104 @@
         const kind = s.unknown ? "unknown" : s.online ? "online" : "offline";
         dot.classList.add(`status-dot--${kind}`);
       }
+      return s;
     } catch (e) {
       // 忽略,抬頭保持預設
+      return null;
     }
+  }
+
+  // ---------- 「最後更新」時間標記 ----------
+  function markUpdated() {
+    lastUpdatedAt = Date.now();
+    const el = document.getElementById("last-updated");
+    if (!el) return;
+    el.classList.remove("is-stale");
+    el.textContent = `最後更新:剛剛`;
+    el.hidden = false;
+
+    if (staleTimer) clearTimeout(staleTimer);
+    staleTimer = setTimeout(() => {
+      const age = Date.now() - lastUpdatedAt;
+      if (age >= STALE_THRESHOLD_MS) el.classList.add("is-stale");
+    }, STALE_THRESHOLD_MS);
+  }
+
+  function renderLastUpdated() {
+    const el = document.getElementById("last-updated");
+    if (!el || !lastUpdatedAt) return;
+    const ageSec = Math.max(0, Math.floor((Date.now() - lastUpdatedAt) / 1000));
+    const text = ageSec < 5
+      ? "剛剛"
+      : ageSec < 60
+        ? `${ageSec} 秒前`
+        : `${Math.floor(ageSec / 60)} 分 ${ageSec % 60} 秒前`;
+    el.textContent = `最後更新:${text}`;
+    if (ageSec * 1000 >= STALE_THRESHOLD_MS) el.classList.add("is-stale");
+    else el.classList.remove("is-stale");
+  }
+
+  // ---------- 自動更新開關 ----------
+  const AUTO_REFRESH_KEY = "netmon:autoRefresh:events";
+
+  function loadAutoRefreshPref() {
+    try {
+      const v = localStorage.getItem(AUTO_REFRESH_KEY);
+      if (v === "0") return false;
+    } catch (_) {}
+    return true; // 預設 ON
+  }
+
+  function saveAutoRefreshPref(enabled) {
+    try {
+      localStorage.setItem(AUTO_REFRESH_KEY, enabled ? "1" : "0");
+    } catch (_) {}
+  }
+
+  function startAutoRefresh() {
+    stopAutoRefresh();
+    if (!autoRefreshEnabled) return;
+    autoRefreshTimer = setInterval(() => {
+      // 不在使用者操作當下打斷 (goToPage / rangechange / status filter 都會設 isFetching)
+      refresh();
+    }, AUTO_REFRESH_MS);
+  }
+
+  function stopAutoRefresh() {
+    if (autoRefreshTimer) {
+      clearInterval(autoRefreshTimer);
+      autoRefreshTimer = null;
+    }
+  }
+
+  function bindAutoRefresh() {
+    const checkbox = document.getElementById("auto-refresh");
+    if (!checkbox) return;
+    autoRefreshEnabled = loadAutoRefreshPref();
+    checkbox.checked = autoRefreshEnabled;
+    checkbox.addEventListener("change", () => {
+      autoRefreshEnabled = checkbox.checked;
+      saveAutoRefreshPref(autoRefreshEnabled);
+      if (autoRefreshEnabled) {
+        // 立即抓一次,別等下個週期
+        refresh();
+        startAutoRefresh();
+      } else {
+        stopAutoRefresh();
+      }
+    });
   }
 
   // ---------- 啟動 ----------
   document.addEventListener("DOMContentLoaded", () => {
     bindStatusChips();
     bindPagination();
+    bindAutoRefresh();
     window.addEventListener("netmon:rangechange", onRangeChange);
     if (window.__netmonRange) currentRange = window.__netmonRange;
-    paintHeader();
-    refresh();
+    refresh(); // 這個 refresh() 內部已包含 paintHeader,並啟動 markUpdated
+    startAutoRefresh();
+    // 「最後更新」文字每 1 秒重算 (讓「N 秒前」即時更新)
+    setInterval(renderLastUpdated, 1000);
   });
 })();
