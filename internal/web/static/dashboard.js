@@ -188,6 +188,10 @@
       animation: { duration: 250 },
       interaction: { mode: "index", intersect: false },
       scales: {
+        // x scale 用預設的 category 即可(Chart.js 4.x line chart 預設值)。
+        // 注意:category scale 的 ticks.callback 收到的是 index (0,1,2...),
+        // 不是 labels 陣列中的值,無法在 callback 內從 value 還原時間;
+        // 因此 labels 必須在 renderCharts() 預先格式化為字串再餵入。
         x: {
           ticks: { color: chartTextColor, maxTicksLimit: 8, maxRotation: 0 },
           grid: { color: chartGridColor, drawBorder: false },
@@ -235,28 +239,29 @@
     };
   }
 
-  function makeTickFormatter(state) {
-    const rangeMs = state.to - state.from;
-    return (value) => {
-      // Chart.js 會以字串形式餵進來 (labels 為字串陣列)
-      const ms = Number(value);
-      if (!Number.isFinite(ms)) return value;
-      if (rangeMs <= 24 * 60 * 60 * 1000) {
-        return formatShortTime(ms);
-      }
-      return formatShortDateTime(ms);
-    };
+  // 把 bucket_start 預先格式化為顯示字串,直接餵給 category scale 當 labels。
+  // (Chart.js 4.x 的 x scale 預設就是 category,而 category scale 的
+  //  ticks.callback 收到的是 index 而非 labels 值,無法在 callback 裡
+  //  從 value 還原時間;若要在 callback 取得 label 字串,得用
+  //  this.getLabelForValue(value),但這需要 function expression 拿到 this,
+  //  反而比預先格式化麻煩。)
+  function formatBucketLabels(stats, state) {
+    const useShortTime = (state.to - state.from) <= 24 * 60 * 60 * 1000;
+    return (stats || []).map((s) => {
+      if (!s.bucket_start) return "—";
+      return useShortTime ? formatShortTime(s.bucket_start) : formatShortDateTime(s.bucket_start);
+    });
   }
 
   function renderCharts(stats, state) {
-    const labels = (stats || []).map((s) => s.bucket_start);
+    const labels = formatBucketLabels(stats, state);
     const latencies = (stats || []).map((s) => s.latency_avg_ms);
     const losses = (stats || []).map((s) => s.loss_pct);
     const empty = !labels.length;
 
-    const tickFmt = makeTickFormatter(state);
     const opts = chartOptions();
-    opts.scales.x.ticks.callback = tickFmt;
+    // 不再設 x ticks.callback:labels 已是格式化好的字串,category scale 直接顯示。
+    // maxTicksLimit: 8 仍會讓 Chart.js 等距挑 8 個 tick 顯示,避免 X 軸擠滿文字。
     opts.scales.y.ticks.callback = (v) => v;
 
     if (!latencyChart) {
