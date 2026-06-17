@@ -1,0 +1,107 @@
+{{define "events.html"}}
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{.Title}} - netmon</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/range.js" defer></script>
+  <script src="/static/events.js" defer></script>
+</head>
+<body data-page="events">
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">netmon</span>
+      <span class="brand-target" id="header-gateway">—</span>
+    </div>
+    <nav class="app-nav" aria-label="主導覽">
+      <a href="/" class="nav-link {{if eq .ActiveNav "dashboard"}}is-active{{end}}">總覽</a>
+      <a href="/events" class="nav-link {{if eq .ActiveNav "events"}}is-active{{end}}">事件歷史</a>
+    </nav>
+  </header>
+
+  <main class="app-main">
+    <section class="page-header">
+      <div>
+        <h1 class="page-title">事件歷史</h1>
+        <p class="page-subtitle">查閱過去的斷線 / 恢復事件</p>
+      </div>
+      <div class="header-status" id="header-status">
+        <span class="status-dot status-dot--online" aria-hidden="true"></span>
+        <span class="status-text" id="header-status-text">—</span>
+      </div>
+    </section>
+
+    <!-- 篩選列:日期區間 + 狀態 -->
+    <section class="card range-card" aria-label="事件篩選">
+      <div class="filter-row">
+        <div class="filter-group">
+          <span class="filter-label">日期區間</span>
+          <div class="range-presets" role="group" aria-label="快捷區間">
+            <button class="chip" data-range="1h">最近 1 小時</button>
+            <button class="chip" data-range="6h">最近 6 小時</button>
+            <button class="chip" data-range="24h" aria-pressed="true">最近 24 小時</button>
+            <button class="chip" data-range="7d">最近 7 天</button>
+            <button class="chip" data-range="30d">最近 30 天</button>
+            <button class="chip" data-range="custom">自訂</button>
+          </div>
+        </div>
+        <div class="filter-group">
+          <span class="filter-label">狀態</span>
+          <div class="range-presets" role="group" aria-label="事件狀態">
+            <button class="chip chip--status" data-status="all" aria-pressed="true">全部</button>
+            <button class="chip chip--status" data-status="ongoing">進行中</button>
+            <button class="chip chip--status" data-status="resolved">已恢復</button>
+          </div>
+        </div>
+      </div>
+      <div class="range-custom" id="range-custom" hidden>
+        <label class="field">
+          <span>從</span>
+          <input type="datetime-local" id="range-from">
+        </label>
+        <label class="field">
+          <span>到</span>
+          <input type="datetime-local" id="range-to">
+        </label>
+        <div class="range-actions">
+          <button class="btn btn-primary" id="range-apply" type="button">套用</button>
+        </div>
+      </div>
+      <p class="range-current" id="range-current" aria-live="polite"></p>
+    </section>
+
+    <!-- 事件表格 -->
+    <section class="card events-card" aria-label="事件列表">
+      <div class="card-header">
+        <div>
+          <h2 class="card-title">事件清單</h2>
+          <p class="card-subtitle" id="events-subtitle">最近 24 小時</p>
+        </div>
+        <div class="summary" id="events-summary" aria-live="polite"></div>
+      </div>
+      <div class="table-wrap">
+        <table class="events-table">
+          <thead>
+            <tr>
+              <th scope="col" style="width: 12%">狀態</th>
+              <th scope="col" style="width: 22%">開始時間</th>
+              <th scope="col" style="width: 22%">結束時間</th>
+              <th scope="col" style="width: 18%">持續時間</th>
+              <th scope="col">原因</th>
+            </tr>
+          </thead>
+          <tbody id="events-body">
+            <tr><td colspan="5" class="table-state">載入中…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <p class="app-footer">資料來源:SQLite events 資料表 · 點擊篩選條件即時更新</p>
+  </main>
+</body>
+</html>
+{{end}}

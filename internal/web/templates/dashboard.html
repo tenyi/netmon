@@ -1,0 +1,135 @@
+{{define "dashboard.html"}}
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{.Title}} - netmon</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js" defer></script>
+  <script src="/static/range.js" defer></script>
+  <script src="/static/dashboard.js" defer></script>
+</head>
+<body data-page="dashboard">
+  <header class="app-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">netmon</span>
+      <span class="brand-target" id="header-gateway">—</span>
+    </div>
+    <nav class="app-nav" aria-label="主導覽">
+      <a href="/" class="nav-link {{if eq .ActiveNav "dashboard"}}is-active{{end}}">總覽</a>
+      <a href="/events" class="nav-link {{if eq .ActiveNav "events"}}is-active{{end}}">事件歷史</a>
+    </nav>
+  </header>
+
+  <main class="app-main">
+    <section class="page-header">
+      <div>
+        <h1 class="page-title">連線監控總覽</h1>
+        <p class="page-subtitle">即時狀態、最近事件與量測走勢</p>
+      </div>
+      <div class="header-status" id="header-status">
+        <span class="status-dot status-dot--unknown" aria-hidden="true"></span>
+        <span class="status-text">讀取中</span>
+      </div>
+    </section>
+
+    <!-- 日期區間選擇器 -->
+    <section class="card range-card" aria-label="日期區間">
+      <div class="range-presets" role="group" aria-label="快捷區間">
+        <button class="chip" data-range="1h">最近 1 小時</button>
+        <button class="chip" data-range="6h">最近 6 小時</button>
+        <button class="chip" data-range="24h" aria-pressed="true">最近 24 小時</button>
+        <button class="chip" data-range="7d">最近 7 天</button>
+        <button class="chip" data-range="30d">最近 30 天</button>
+        <button class="chip" data-range="custom">自訂</button>
+      </div>
+      <div class="range-custom" id="range-custom" hidden>
+        <label class="field">
+          <span>從</span>
+          <input type="datetime-local" id="range-from">
+        </label>
+        <label class="field">
+          <span>到</span>
+          <input type="datetime-local" id="range-to">
+        </label>
+        <div class="range-actions">
+          <button class="btn btn-primary" id="range-apply" type="button">套用</button>
+        </div>
+      </div>
+      <p class="range-current" id="range-current" aria-live="polite"></p>
+    </section>
+
+    <!-- KPI 卡片 -->
+    <section class="kpi-grid" aria-label="關鍵指標">
+      <article class="kpi-card" data-kpi="status">
+        <div class="kpi-label">目前狀態</div>
+        <div class="kpi-value">
+          <span class="status-dot status-dot--unknown" id="kpi-status-dot" aria-hidden="true"></span>
+          <span id="kpi-status-text">讀取中</span>
+        </div>
+        <div class="kpi-meta" id="kpi-status-meta">—</div>
+      </article>
+      <article class="kpi-card" data-kpi="events">
+        <div class="kpi-label">區間內斷線次數</div>
+        <div class="kpi-value kpi-value--num" id="kpi-events-count">—</div>
+        <div class="kpi-meta" id="kpi-events-meta">—</div>
+      </article>
+      <article class="kpi-card" data-kpi="longest">
+        <div class="kpi-label">最長斷線</div>
+        <div class="kpi-value kpi-value--num" id="kpi-longest-value">—</div>
+        <div class="kpi-meta" id="kpi-longest-meta">—</div>
+      </article>
+      <article class="kpi-card" data-kpi="latency">
+        <div class="kpi-label">平均延遲 (ms)</div>
+        <div class="kpi-value kpi-value--num" id="kpi-latency-value">—</div>
+        <div class="kpi-meta" id="kpi-latency-meta">—</div>
+      </article>
+    </section>
+
+    <!-- 事件時間軸 (新主視覺) -->
+    <section class="card events-card" aria-label="區間內事件">
+      <div class="card-header">
+        <div>
+          <h2 class="card-title">斷線事件</h2>
+          <p class="card-subtitle" id="events-subtitle">最近 24 小時</p>
+        </div>
+        <a href="/events" class="btn btn-ghost">檢視全部 →</a>
+      </div>
+      <div id="events-timeline" class="timeline" role="list">
+        <div class="timeline-empty">載入中…</div>
+      </div>
+    </section>
+
+    <!-- 圖表 -->
+    <section class="charts-grid">
+      <article class="card chart-card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">延遲 (ms)</h2>
+            <p class="card-subtitle">選定區間內的平均 RTT</p>
+          </div>
+        </div>
+        <div class="chart-wrapper">
+          <canvas id="latency-chart"></canvas>
+        </div>
+      </article>
+      <article class="card chart-card">
+        <div class="card-header">
+          <div>
+            <h2 class="card-title">封包遺失 (%)</h2>
+            <p class="card-subtitle">選定區間內的 loss 比例</p>
+          </div>
+        </div>
+        <div class="chart-wrapper">
+          <canvas id="loss-chart"></canvas>
+        </div>
+      </article>
+    </section>
+
+    <p class="app-footer">自動每 5 秒更新 · 圖表資料隨日期區間切換 · 事件資料來自 SQLite</p>
+  </main>
+</body>
+</html>
+{{end}}
