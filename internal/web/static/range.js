@@ -58,6 +58,31 @@
     return d.getTime();
   }
 
+  /**
+   * 將 state 滑動到「現在」(sliding window)。
+   * - preset (1h/6h/24h/7d/30d):to 設為 Date.now(),from 重新算為 to - span,
+   *   granularity / label 同步重算。
+   * - custom 模式:保持原樣不動,讓使用者自己決定的時點持續生效。
+   * - 找不到對應 preset (例如 state.key 是未知字串) 時,維持原 state。
+   */
+  function slideRange(state) {
+    if (!state || state.key === "custom") return state;
+    const span = PRESETS[state.key];
+    if (!span) return state;
+    const to = Date.now();
+    const from = to - span;
+    return {
+      key: state.key,
+      from,
+      to,
+      granularity: pickGranularity(span),
+      label: formatRange(from, to),
+    };
+  }
+
+  // 對外暴露 slideRange 供其他腳本 (events.js 等) 在自動更新週期內使用
+  window.__netmonRangeSlide = slideRange;
+
   function emit(state) {
     const ev = new CustomEvent("netmon:rangechange", { detail: state });
     window.dispatchEvent(ev);

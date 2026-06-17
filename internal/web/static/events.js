@@ -215,6 +215,10 @@
 
   async function refresh() {
     if (!currentRange || isFetching) return;
+    // 自動更新時讓 preset 區間隨時間滑動 (custom 模式由 slideRange 原樣回傳)
+    if (window.__netmonRangeSlide) {
+      currentRange = window.__netmonRangeSlide(currentRange);
+    }
     isFetching = true;
     try {
       const offset = (currentPage - 1) * PAGE_SIZE;
@@ -230,6 +234,9 @@
       markUpdated();
       const subtitle = document.getElementById("events-subtitle");
       if (subtitle) subtitle.textContent = currentRange.label;
+      // 同步更新 range.js 的「目前區間」文字 (slide 後 from/to 已改)
+      const rangeLabel = document.getElementById("range-current");
+      if (rangeLabel) rangeLabel.textContent = currentRange.label;
       // 確保 paintHeader 沒有被優化掉
       void status;
     } catch (e) {

@@ -309,6 +309,10 @@
 
   async function refreshRangeData() {
     if (!currentRange || isFetching) return;
+    // 自動更新時讓 preset 區間隨時間滑動 (custom 模式由 slideRange 原樣回傳)
+    if (window.__netmonRangeSlide) {
+      currentRange = window.__netmonRangeSlide(currentRange);
+    }
     isFetching = true;
     try {
       const [events, stats] = await Promise.all([
@@ -322,6 +326,9 @@
       if (subtitle) {
         subtitle.textContent = `${currentRange.label} · 共 ${events.length} 筆`;
       }
+      // 同步更新 range.js 的「目前區間」文字 (slide 後 from/to 已改)
+      const rangeLabel = document.getElementById("range-current");
+      if (rangeLabel) rangeLabel.textContent = currentRange.label;
     } catch (e) {
       console.error("range refresh failed", e);
     } finally {
@@ -343,5 +350,7 @@
     refreshStatus();
     refreshRangeData();
     setInterval(refreshStatus, 5000);
+    // 區間資料也每 5 秒重抓,搭配 slideRange 讓 preset 區間隨時間滑動
+    setInterval(refreshRangeData, 5000);
   });
 })();
