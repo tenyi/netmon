@@ -115,14 +115,15 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 | `GET /` | 渲染 `dashboard.html` |
 | `GET /events` | 渲染 `events.html` |
 | `GET /api/status` | 即時狀態 JSON (`Status` struct) |
-| `GET /api/events?from=&to=` | 事件 JSON;**預設範圍為過去 24 小時** |
+| `GET /api/events?from=&to=&limit=&offset=` | 事件 JSON;**預設範圍為過去 24 小時**。`limit > 0` 啟用分頁(上限 200),回應加 `X-Total-Count` header;`limit` 未帶或為 0 時回傳全部(供 dashboard KPI 計算) |
 | `GET /api/stats?from=&to=&granularity=` | 統計 JSON;**預設範圍為過去 1 小時**;`granularity` 為合法 `time.ParseDuration` 時,做 in-memory 加權平均彙總 (`aggregateStats()`) |
 | `GET /static/*` | `http.FS` 服務 `static/` 子樹 |
 
 前端:
 - **Chart.js 從 CDN 載入** (`https://cdn.jsdelivr.net/npm/chart.js`),無離線 fallback。需要內網部署時請改成本地檔。
-- `dashboard.js` 每 **5 秒**輪詢 `/api/status` + `/api/stats`,用 Chart.js 畫 latency / loss 兩張折線圖。
-- `events.js` 載入時抓一次 `/api/events` 過去 24 小時資料,渲染表格。
+- `range.js` 提供共用的日期區間選擇器,透過 `netmon:rangechange` CustomEvent 通知;選擇同步到 URL query string 與 sessionStorage。
+- `dashboard.js` 每 **5 秒**輪詢 `/api/status` 更新即時狀態;區間資料於日期 chip 變更時重抓 `/api/events` (無 limit,算 KPI) + `/api/stats`,用 Chart.js 畫 latency / loss 兩張折線圖,並依區間自動挑 `granularity` (≤ 6h 無 / ≤ 1d 5m / ≤ 3d 15m / ≤ 7d 1h / 其他 4h)。
+- `events.js` 監聽日期 chip + 狀態 chip;抓 `/api/events?limit=25&offset=...` (前端每頁 25 筆),從 `X-Total-Count` 讀總數;**總筆數 < 25 時隱藏分頁器**;切換日期區間時自動回到第 1 頁。
 - 模板用 `html/template` + `gin.H` 注入 `Title`、`ActiveNav`。Template 檔案內容用 `{{define "dashboard.html"}}...{{end}}` 包裹,以便 `template.ParseFS` 載入。
 
 ## 跨平台注意事項
@@ -145,6 +146,7 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 ## 已知可改進點 (非緊急)
 
 - `EventRepo.CloseOpen` 用「最新一筆未結束」假設;若要嚴謹的「一對一」事件,需改成 `InsertOpen` 回傳 ID 並由 monitor 持有,`CloseOpen(ctx, id, endedAt)` 才關該筆
+- `EventRepo.List` 與 `ListPage` 各自發 query,若區間內事件量爆大(> 數萬筆)且前端要算 KPI,目前 dashboard 會拉回全部,可能拖累。可改成「`List` 加 max 限制 + 額外 `Summary` API 提供 count / longest / avg」兩個端點
 - `ICMPPinger.Ping` 每次新建 `ping.NewPinger`,若要降到秒級以下的高頻監控,可改為長連線 + `OnRecv` callback
 - `cmd/serve.go` 同時掛在 root 與 `serve` subcommand,輸出 `cobra` help 時 `netmon -h` 與 `netmon serve -h` 行為不完全一致
 - Chart.js 走 CDN,離線環境需替換

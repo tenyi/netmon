@@ -53,7 +53,7 @@ func (r *EventRepo) CloseOpen(ctx context.Context, endedAt int64) error {
 	return nil
 }
 
-// List 查詢 started_at 落在 [from, to] 內的事件。
+// List 查詢 started_at 落在 [from, to] 內的所有事件,依 started_at DESC 排序。
 func (r *EventRepo) List(ctx context.Context, from, to int64) ([]Event, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, started_at, ended_at, reason FROM events
@@ -86,6 +86,63 @@ func (r *EventRepo) List(ctx context.Context, from, to int64) ([]Event, error) {
 		events = []Event{}
 	}
 	return events, nil
+}
+
+// ListPage 查詢 started_at 落在 [from, to] 內的分頁事件,依 started_at DESC 排序。
+// limit 與 offset 由呼叫端保證為非負整數;limit 為 0 時視同無上限。
+func (r *EventRepo) ListPage(ctx context.Context, from, to int64, limit, offset int) ([]Event, error) {
+	if limit < 0 || offset < 0 {
+		return nil, fmt.Errorf("limit 與 offset 必須為非負整數")
+	}
+
+	query := `SELECT id, started_at, ended_at, reason FROM events
+		WHERE started_at >= ? AND started_at <= ?
+		ORDER BY started_at DESC`
+	args := []any{from, to}
+	if limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		args = append(args, limit, offset)
+	}
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("查詢事件失敗: %w", err)
+	}
+	defer rows.Close()
+
+	var events []Event
+	for rows.Next() {
+		var e Event
+		var endedAt sql.NullInt64
+		if err := rows.Scan(&e.ID, &e.StartedAt, &endedAt, &e.Reason); err != nil {
+			return nil, fmt.Errorf("讀取事件列失敗: %w", err)
+		}
+		if endedAt.Valid {
+			v := endedAt.Int64
+			e.EndedAt = &v
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("迭代事件列失敗: %w", err)
+	}
+	if events == nil {
+		events = []Event{}
+	}
+	return events, nil
+}
+
+// Count 回傳 started_at 落在 [from, to] 內的事件總數。
+func (r *EventRepo) Count(ctx context.Context, from, to int64) (int64, error) {
+	var n int64
+	err := r.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE started_at >= ? AND started_at <= ?`,
+		from, to,
+	).Scan(&n)
+	if err != nil {
+		return 0, fmt.Errorf("查詢事件總數失敗: %w", err)
+	}
+	return n, nil
 }
 
 // GetOpen 取得目前未結束的斷線事件。

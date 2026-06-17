@@ -40,6 +40,9 @@ func (h *handler) apiStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, h.deps.Status.Status())
 }
 
+// eventsPageSize 上限,避免惡意 query 拉走過多資料。
+const eventsPageSizeMax = 200
+
 func (h *handler) apiEvents(c *gin.Context) {
 	from, to, err := parseTimeRange(c, 24*time.Hour)
 	if err != nil {
@@ -47,12 +50,62 @@ func (h *handler) apiEvents(c *gin.Context) {
 		return
 	}
 
-	events, err := h.deps.Events.List(c.Request.Context(), from, to)
+	limit, offset, err := parsePagination(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx := c.Request.Context()
+	if limit > 0 {
+		events, err := h.deps.Events.ListPage(ctx, from, to, limit, offset)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "查詢事件失敗"})
+			return
+		}
+		total, err := h.deps.Events.Count(ctx, from, to)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "查詢事件總數失敗"})
+			return
+		}
+		c.Header("X-Total-Count", strconv.FormatInt(total, 10))
+		c.JSON(http.StatusOK, events)
+		return
+	}
+
+	// 未指定 limit 時,回傳全部事件 (dashboard KPI 用)
+	events, err := h.deps.Events.List(ctx, from, to)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查詢事件失敗"})
 		return
 	}
 	c.JSON(http.StatusOK, events)
+}
+
+// parsePagination 解析 limit 與 offset 查詢參數。
+// limit 為 0 或未指定時表示不分頁 (回傳全部);
+// limit 上限為 eventsPageSizeMax,避免單次回應過大。
+func parsePagination(c *gin.Context) (int, int, error) {
+	limit := 0
+	offset := 0
+	if v := c.Query("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return 0, 0, errInvalidParam("limit")
+		}
+		if n > eventsPageSizeMax {
+			n = eventsPageSizeMax
+		}
+		limit = n
+	}
+	if v := c.Query("offset"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return 0, 0, errInvalidParam("offset")
+		}
+		offset = n
+	}
+	return limit, offset, nil
 }
 
 func (h *handler) apiStats(c *gin.Context) {
