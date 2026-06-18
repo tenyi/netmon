@@ -2,7 +2,7 @@
    events.js — 事件歷史頁邏輯
    - 監聽 netmon:rangechange → 重抓 /api/events
    - 額外支援狀態過濾:全部 / 進行中 / 已恢復 (前端過濾,僅作用於目前頁)
-   - 分頁:每頁 25 筆,從 X-Total-Count 讀總數;總筆數 < 25 時隱藏分頁器
+   - 分頁:每頁 25 筆,從 X-Total-Count 讀總數;僅一頁時隱藏分頁器
    - 切換日期區間或狀態時自動回到第 1 頁
    - 自動更新開關:預設 ON,啟用時每 5 秒重抓 events + 抬頭 status;
      偏好寫到 localStorage,重整保留
@@ -140,8 +140,8 @@
 
     const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
-    // 總筆數 < PAGE_SIZE 時隱藏整個分頁器 (需求:小於 25 筆時 hide)
-    if (totalCount < PAGE_SIZE) {
+    // 僅一頁時隱藏整個分頁器
+    if (totalPages <= 1) {
       nav.hidden = true;
       return;
     }
@@ -198,7 +198,7 @@
 
   function refreshSummaryOnly() {
     // 純前端過濾:重畫表格與摘要,不重新 fetch
-    // (注意:過濾後筆數可能 < 25,但分頁器仍依 totalCount 判斷是否顯示)
+    // (注意:過濾後筆數可能變少,但分頁器仍依 totalCount 與 totalPages 判斷是否顯示)
     const tbody = document.getElementById("events-body");
     if (tbody) {
       // 取出目前 tbody 的 events cache

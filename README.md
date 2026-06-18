@@ -70,6 +70,17 @@ $env:GOOS="windows"; $env:GOARCH="amd64"; go build -o dist/netmon-windows-amd64.
 
 編譯時維持 `CGO_ENABLED=0`（純 Go SQLite，無 C 依賴）。
 
+## 部署
+
+Web 前端（`internal/web/templates/`、`internal/web/static/`）透過 `go:embed` **在編譯時打包進執行檔**，執行時由程式記憶體提供，不會讀取伺服器上的原始檔目錄。
+
+因此更新前端或後端程式碼後，需在本機或 CI **重新 `go build`**，再上傳新的執行檔並重啟服務；僅複製 `internal/` 資料夾到伺服器**不會**生效。
+
+執行時才讀取的檔案則不必重編：
+
+- **`.env`** — 設定檔，改完重啟即可
+- **`DB_PATH` 指向的 SQLite** — 資料庫，與執行檔分開存放
+
 ## API
 
 | 路由 | 說明 |
