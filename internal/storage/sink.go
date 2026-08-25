@@ -38,5 +38,21 @@ func (s *Sink) OnStats(ctx context.Context, bucketStart int64, latencyAvgMs, los
 	})
 }
 
+// GetOpenEvent 回傳目前未結束的斷線事件;沒有時回 (nil, nil)。
+// 供 monitor 重啟時 reconciliation(搭配 monitor.OpenEventInspector)。
+func (s *Sink) GetOpenEvent(ctx context.Context) (*monitor.OpenEvent, error) {
+	e, err := s.events.GetOpen(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if e == nil {
+		return nil, nil
+	}
+	return &monitor.OpenEvent{StartedAt: e.StartedAt, Reason: e.Reason}, nil
+}
+
 // 確保 Sink 實作 monitor.EventSink。
 var _ monitor.EventSink = (*Sink)(nil)
+
+// 確保 Sink 實作 monitor.OpenEventInspector。
+var _ monitor.OpenEventInspector = (*Sink)(nil)

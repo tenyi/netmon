@@ -174,6 +174,46 @@ func setupStatsDB(t *testing.T) *StatsRepo {
 	return NewStatsRepo(db)
 }
 
+// TestSinkGetOpenEvent:Sink 應暴露「目前未結束事件」供 monitor 重啟時 reconciliation。
+func TestSinkGetOpenEvent(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	ev := NewEventRepo(db)
+	st := NewStatsRepo(db)
+	c := NewSink(ev, st)
+
+	if _, err := ev.InsertOpen(ctx, 111, "stale"); err != nil {
+		t.Fatalf("InsertOpen: %v", err)
+	}
+	got, err := c.GetOpenEvent(ctx)
+	if err != nil {
+		t.Fatalf("GetOpenEvent: %v", err)
+	}
+	if got == nil || got.StartedAt != 111 || got.Reason != "stale" {
+		t.Fatalf("expected stale open event, got %+v", got)
+	}
+
+	if err := ev.CloseOpen(ctx, 222); err != nil {
+		t.Fatalf("CloseOpen: %v", err)
+	}
+	got, err = c.GetOpenEvent(ctx)
+	if err != nil {
+		t.Fatalf("GetOpenEvent after close: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected nil after close, got %+v", got)
+	}
+}
+
 func TestStatsRepoUpsertList(t *testing.T) {
 	repo := setupStatsDB(t)
 	ctx := context.Background()
