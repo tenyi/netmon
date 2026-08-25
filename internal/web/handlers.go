@@ -56,14 +56,20 @@ func (h *handler) apiEvents(c *gin.Context) {
 		return
 	}
 
+	status, err := parseStatus(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	ctx := c.Request.Context()
 	if limit > 0 {
-		events, err := h.deps.Events.ListPage(ctx, from, to, limit, offset)
+		events, err := h.deps.Events.ListPage(ctx, from, to, limit, offset, status)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "查詢事件失敗"})
 			return
 		}
-		total, err := h.deps.Events.Count(ctx, from, to)
+		total, err := h.deps.Events.Count(ctx, from, to, status)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "查詢事件總數失敗"})
 			return
@@ -106,6 +112,19 @@ func parsePagination(c *gin.Context) (int, int, error) {
 		offset = n
 	}
 	return limit, offset, nil
+}
+
+// parseStatus 解析 status 查詢參數;未指定時視同 all。
+func parseStatus(c *gin.Context) (storage.EventStatus, error) {
+	v := c.Query("status")
+	if v == "" {
+		return storage.EventStatusAll, nil
+	}
+	switch v {
+	case "all", "ongoing", "resolved":
+		return storage.EventStatus(v), nil
+	}
+	return "", errInvalidParam("status")
 }
 
 func (h *handler) apiStats(c *gin.Context) {

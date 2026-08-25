@@ -85,7 +85,7 @@ func TestEventRepoListPageAndCount(t *testing.T) {
 	from := base - 1
 	to := base + int64(total)*1000 + 1
 
-	count, err := repo.Count(ctx, from, to)
+	count, err := repo.Count(ctx, from, to, EventStatusAll)
 	if err != nil {
 		t.Fatalf("Count: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestEventRepoListPageAndCount(t *testing.T) {
 	}
 
 	// 第一頁:應為最新的 10 筆 (i=29..20)
-	page1, err := repo.ListPage(ctx, from, to, 10, 0)
+	page1, err := repo.ListPage(ctx, from, to, 10, 0, EventStatusAll)
 	if err != nil {
 		t.Fatalf("ListPage 1: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestEventRepoListPageAndCount(t *testing.T) {
 	}
 
 	// 第二頁:接續 10 筆 (i=19..10)
-	page2, err := repo.ListPage(ctx, from, to, 10, 10)
+	page2, err := repo.ListPage(ctx, from, to, 10, 10, EventStatusAll)
 	if err != nil {
 		t.Fatalf("ListPage 2: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestEventRepoListPageAndCount(t *testing.T) {
 	}
 
 	// 第三頁:剩餘 10 筆 (i=9..0)
-	page3, err := repo.ListPage(ctx, from, to, 10, 20)
+	page3, err := repo.ListPage(ctx, from, to, 10, 20, EventStatusAll)
 	if err != nil {
 		t.Fatalf("ListPage 3: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestEventRepoListPageAndCount(t *testing.T) {
 	}
 
 	// 越界:offset 超出總數應回空 slice
-	pageBeyond, err := repo.ListPage(ctx, from, to, 10, 100)
+	pageBeyond, err := repo.ListPage(ctx, from, to, 10, 100, EventStatusAll)
 	if err != nil {
 		t.Fatalf("ListPage beyond: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestEventRepoListPageAndCount(t *testing.T) {
 	}
 
 	// limit=0 表示無上限,應回全部
-	all, err := repo.ListPage(ctx, from, to, 0, 0)
+	all, err := repo.ListPage(ctx, from, to, 0, 0, EventStatusAll)
 	if err != nil {
 		t.Fatalf("ListPage no limit: %v", err)
 	}
@@ -151,10 +151,10 @@ func TestEventRepoListPageAndCount(t *testing.T) {
 	}
 
 	// 負數應回錯
-	if _, err := repo.ListPage(ctx, from, to, -1, 0); err == nil {
+	if _, err := repo.ListPage(ctx, from, to, -1, 0, EventStatusAll); err == nil {
 		t.Fatal("expected error for negative limit")
 	}
-	if _, err := repo.ListPage(ctx, from, to, 10, -1); err == nil {
+	if _, err := repo.ListPage(ctx, from, to, 10, -1, EventStatusAll); err == nil {
 		t.Fatal("expected error for negative offset")
 	}
 }

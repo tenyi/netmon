@@ -1,8 +1,8 @@
 /* =========================================================================
    events.js — 事件歷史頁邏輯
    - 監聽 netmon:rangechange → 重抓 /api/events
-   - 額外支援狀態過濾:全部 / 進行中 / 已恢復 (前端過濾,僅作用於目前頁)
-   - 分頁:每頁 25 筆,從 X-Total-Count 讀總數;總筆數 < 25 時隱藏分頁器
+   - 額外支援狀態過濾:全部 / 進行中 / 已恢復 (下推至後端 SQL,分頁與 X-Total-Count 同步)
+   - 分頁:每頁 25 筆,從 X-Total-Count 讀總數;僅一頁時隱藏分頁器
    - 切換日期區間或狀態時自動回到第 1 頁
    - 自動更新開關:預設 ON,啟用時每 5 秒重抓 events + 抬頭 status;
      偏好寫到 localStorage,重整保留
@@ -46,11 +46,14 @@
    * total 來自後端 X-Total-Count header;若後端沒回 header(未指定 limit),
    * 則以 events.length 作為 total(代表未分頁)。
    */
-  async function fetchEventsPage(from, to, limit, offset) {
+  async function fetchEventsPage(from, to, limit, offset, status) {
     const params = new URLSearchParams({ from: String(from), to: String(to) });
     if (limit > 0) {
       params.set("limit", String(limit));
       params.set("offset", String(offset));
+    }
+    if (status && status !== "all") {
+      params.set("status", status);
     }
     const res = await fetch(`/api/events?${params.toString()}`, {
       headers: { Accept: "application/json" },
@@ -80,13 +83,9 @@
   function renderTable(events) {
     const tbody = document.getElementById("events-body");
     if (!tbody) return;
-    const filtered = statusFilter === "all"
-      ? events
-      : statusFilter === "ongoing"
-        ? events.filter((e) => !e.ended_at)
-        : events.filter((e) => !!e.ended_at);
-
-    if (!filtered.length) {
+    // 狀態過濾已下推到後端(見 fetchEventsPage 的 status 參數),
+    // 這裡只負責畫表 — X-Total-Count / 分頁器才與真實筆數一致。
+    if (!events.length) {
       const msg = totalCount === 0
         ? "選定區間內沒有事件"
         : (currentPage > 1)
@@ -96,7 +95,7 @@
       return;
     }
 
-    tbody.innerHTML = filtered.map((e) => {
+    tbody.innerHTML = events.map((e) => {
       const ongoing = !e.ended_at;
       const badge = ongoing
         ? '<span class="badge badge--offline">進行中</span>'
@@ -140,8 +139,8 @@
 
     const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
-    // 總筆數 < PAGE_SIZE 時隱藏整個分頁器 (需求:小於 25 筆時 hide)
-    if (totalCount < PAGE_SIZE) {
+    // 僅一頁時隱藏整個分頁器
+    if (totalPages <= 1) {
       nav.hidden = true;
       return;
     }
@@ -186,27 +185,15 @@
     const chips = document.querySelectorAll(".chip--status");
     chips.forEach((c) => {
       c.addEventListener("click", () => {
+        // 切換狀態篩選:下推到後端重抓(回到第 1 頁),X-Total-Count 才誠實
         statusFilter = c.dataset.status;
         chips.forEach((other) => {
           other.setAttribute("aria-pressed", other === c ? "true" : "false");
         });
-        // 切換狀態篩選不重抓 (只過濾當前頁),但仍更新摘要與分頁狀態
-        refreshSummaryOnly();
+        currentPage = 1;
+        refresh();
       });
     });
-  }
-
-  function refreshSummaryOnly() {
-    // 純前端過濾:重畫表格與摘要,不重新 fetch
-    // (注意:過濾後筆數可能 < 25,但分頁器仍依 totalCount 判斷是否顯示)
-    const tbody = document.getElementById("events-body");
-    if (tbody) {
-      // 取出目前 tbody 的 events cache
-      const cache = currentPageEvents;
-      renderTable(cache);
-    }
-    renderSummary();
-    renderPagination();
   }
 
   // ---------- 抓取 ----------
@@ -223,7 +210,7 @@
     try {
       const offset = (currentPage - 1) * PAGE_SIZE;
       const [page, status] = await Promise.all([
-        fetchEventsPage(currentRange.from, currentRange.to, PAGE_SIZE, offset),
+        fetchEventsPage(currentRange.from, currentRange.to, PAGE_SIZE, offset, statusFilter),
         paintHeader(),
       ]);
       currentPageEvents = page.events;

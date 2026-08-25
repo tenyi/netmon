@@ -88,15 +88,19 @@ func (r *EventRepo) List(ctx context.Context, from, to int64) ([]Event, error) {
 	return events, nil
 }
 
-// ListPage 查詢 started_at 落在 [from, to] 內的分頁事件,依 started_at DESC 排序。
+// ListPage 查詢 started_at 落在 [from, to] 內、符合 status 過濾的分頁事件,依 started_at DESC。
 // limit 與 offset 由呼叫端保證為非負整數;limit 為 0 時視同無上限。
-func (r *EventRepo) ListPage(ctx context.Context, from, to int64, limit, offset int) ([]Event, error) {
+// status 必須為合法 EventStatus(包含空/all),否則回錯。
+func (r *EventRepo) ListPage(ctx context.Context, from, to int64, limit, offset int, status EventStatus) ([]Event, error) {
+	if !status.valid() {
+		return nil, fmt.Errorf("事件狀態過濾值無效: %q", status)
+	}
 	if limit < 0 || offset < 0 {
 		return nil, fmt.Errorf("limit 與 offset 必須為非負整數")
 	}
 
 	query := `SELECT id, started_at, ended_at, reason FROM events
-		WHERE started_at >= ? AND started_at <= ?
+		WHERE started_at >= ? AND started_at <= ?` + status.whereClause() + `
 		ORDER BY started_at DESC`
 	args := []any{from, to}
 	if limit > 0 {
@@ -132,11 +136,14 @@ func (r *EventRepo) ListPage(ctx context.Context, from, to int64, limit, offset 
 	return events, nil
 }
 
-// Count 回傳 started_at 落在 [from, to] 內的事件總數。
-func (r *EventRepo) Count(ctx context.Context, from, to int64) (int64, error) {
+// Count 回傳 started_at 落在 [from, to] 內、符合 status 過濾的事件總數。
+func (r *EventRepo) Count(ctx context.Context, from, to int64, status EventStatus) (int64, error) {
+	if !status.valid() {
+		return 0, fmt.Errorf("事件狀態過濾值無效: %q", status)
+	}
 	var n int64
 	err := r.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM events WHERE started_at >= ? AND started_at <= ?`,
+		`SELECT COUNT(*) FROM events WHERE started_at >= ? AND started_at <= ?`+status.whereClause(),
 		from, to,
 	).Scan(&n)
 	if err != nil {
