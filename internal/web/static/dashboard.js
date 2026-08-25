@@ -138,6 +138,21 @@
     }
   }
 
+  // ---------- KPI:平均延遲 (由 stats 加權計算,純函式在 kpi.js) ----------
+  function renderLatencyKpi(stats) {
+    const val = document.getElementById("kpi-latency-value");
+    const meta = document.getElementById("kpi-latency-meta");
+    if (!val || !meta) return;
+    const k = window.__netmonKpi ? window.__netmonKpi.latencyKpi(stats) : { ok: false };
+    if (!k.ok) {
+      val.textContent = "—";
+      meta.textContent = "區間內無資料";
+      return;
+    }
+    val.textContent = (Math.round(k.avgMs * 10) / 10).toFixed(1);
+    meta.textContent = `${k.samples} 樣本 · 加權遺失 ${k.lossPct.toFixed(1)}%`;
+  }
+
   // ---------- KPI:事件統計 ----------
   function renderEventKpis(events) {
     const count = document.getElementById("kpi-events-count");
@@ -325,6 +340,7 @@
         fetchJson(`/api/stats?${buildRangeQuery(currentRange)}`),
       ]);
       renderEventKpis(events);
+      renderLatencyKpi(stats);
       renderTimeline(events);
       renderCharts(stats, currentRange);
       const subtitle = document.getElementById("events-subtitle");
