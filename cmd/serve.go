@@ -33,6 +33,26 @@ func init() {
 	}
 }
 
+// newServer 建立帶齊 timeout 的 http.Server。
+//
+//	ReadHeaderTimeout 5s  防 Slowloris(慢速 header 攻擊)
+//	ReadTimeout     30s  讀取整個 request 的期限
+//	WriteTimeout    30s  寫完 response 的期限
+//	IdleTimeout    120s  keep-alive 閒置連線生命週期(大於讀寫上限)
+//
+// 本服務皆是小 response(HTML/JSON)且無 WebSocket/SSE/長輪詢,
+// 固定 30s 上限足敷,不會正常請求被截斷。
+func newServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+}
+
 func runServe() error {
 	cfg, err := config.LoadFromEnv(configPath)
 	if err != nil {
@@ -68,10 +88,7 @@ func runServe() error {
 		Status: mon,
 	})
 
-	srv := &http.Server{
-		Addr:    cfg.WebAddr,
-		Handler: engine,
-	}
+	srv := newServer(cfg.WebAddr, engine)
 
 	go func() {
 		log.Printf("Web 服務啟動於 %s", cfg.WebAddr)
