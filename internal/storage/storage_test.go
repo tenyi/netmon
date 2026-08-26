@@ -87,6 +87,25 @@ func TestEventRepoInsertCloseList(t *testing.T) {
 	}
 }
 
+// TestEventRepoCloseOpenErrNoOpen 釘住 spec:沒有未結束事件時 CloseOpen 必須回錯。
+// 這保證呼叫端若先 GetOpen 判斷 nil,可拿到明確語意而非靜默成功。
+func TestEventRepoCloseOpenErrNoOpen(t *testing.T) {
+	t.Parallel()
+	repo := setupTestDB(t)
+	ctx := context.Background()
+
+	if _, err := repo.InsertOpen(ctx, 100, "x"); err != nil {
+		t.Fatalf("InsertOpen: %v", err)
+	}
+	if err := repo.CloseOpen(ctx, 100); err != nil {
+		t.Fatalf("first CloseOpen: %v", err)
+	}
+
+	if err := repo.CloseOpen(ctx, 200); err == nil {
+		t.Fatal("expected error when no open event exists")
+	}
+}
+
 // TestEventRepoListPageAndCount 驗證分頁與總數:30 筆事件,
 // 跨頁讀取應依 started_at DESC 排序,Count 與分頁總和一致。
 func TestEventRepoListPageAndCount(t *testing.T) {
