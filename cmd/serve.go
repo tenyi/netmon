@@ -73,6 +73,14 @@ func runServe() error {
 	statsRepo := storage.NewStatsRepo(db)
 	sink := storage.NewSink(eventRepo, statsRepo)
 
+	// 啟動期 reconciliation:清理 DB 中除最新一筆外的歷史孤兒未結束事件。
+	// 失敗只 log 不中斷啟動,讓服務先上線由人工處理。
+	if n, err := sink.ReconcileOpen(context.Background()); err != nil {
+		log.Printf("啟動期清理孤兒斷線事件失敗: %v", err)
+	} else if n > 0 {
+		log.Printf("已清理 %d 筆孤兒斷線事件", n)
+	}
+
 	mon := monitor.New(cfg, sink, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())

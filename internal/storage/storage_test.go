@@ -296,6 +296,46 @@ func TestCloseOrphanedOpen(t *testing.T) {
 	}
 }
 
+// TestSinkReconcileOpen 驗證 Sink.ReconcileOpen 為薄 wrapper,回傳清理筆數並具冪等性。
+func TestSinkReconcileOpen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	events := NewEventRepo(db)
+	sink := NewSink(events, NewStatsRepo(db))
+
+	if _, err := events.InsertOpen(ctx, 100, "old"); err != nil {
+		t.Fatalf("InsertOpen 1: %v", err)
+	}
+	if _, err := events.InsertOpen(ctx, 200, "newest"); err != nil {
+		t.Fatalf("InsertOpen 2: %v", err)
+	}
+
+	n, err := sink.ReconcileOpen(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileOpen: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 orphan closed, got %d", n)
+	}
+
+	n2, err := sink.ReconcileOpen(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileOpen 2: %v", err)
+	}
+	if n2 != 0 {
+		t.Fatalf("expected 0 on second call, got %d", n2)
+	}
+}
+
 func TestStatsRepoUpsertList(t *testing.T) {
 	repo := setupStatsDB(t)
 	ctx := context.Background()
