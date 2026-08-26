@@ -26,7 +26,9 @@ copy .env.example .env
 go run .
 ```
 
-4. 開啟瀏覽器造訪 `http://localhost:8080`
+4. 開啟瀏覽器造訪 `http://localhost:8080`（預設只監聽本機；跨機存取請設 `WEB_ADDR=:8080`）
+
+> **安全提醒**：Web 服務無認證機制，設為 `:8080`（綁所有接口）時等同暴露給該網路的所有人，僅在可信網路內使用。
 
 ## 設定 (.env)
 
@@ -36,7 +38,7 @@ go run .
 | `PING_INTERVAL` | ping 間隔 | `1s` |
 | `PING_TIMEOUT` | 單次 ping 逾時 | `2s` |
 | `STATS_INTERVAL` | 統計桶週期 | `1m` |
-| `WEB_ADDR` | Web 監聽位址 | `:8080` |
+| `WEB_ADDR` | Web 監聽位址（預設只綁本機，服務無認證，跨機時再用 `:8080`） | `127.0.0.1:8080` |
 | `DB_PATH` | SQLite 路徑 | `./data/netmon.db` |
 | `RETENTION_DAYS` | 資料保留天數 | `30` |
 
