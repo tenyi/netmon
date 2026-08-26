@@ -1,0 +1,19 @@
+# 環境與資料
+.env
+data/
+!data/.gitkeep
+
+# 編譯產物
+netmon
+netmon.exe
+dist/
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+*.swp
+
+# AI 工具工作目錄 (skill 與本機快取,不進版控)
+.agent/
+.claude/

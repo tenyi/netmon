@@ -830,6 +830,10 @@ h3 {
   flex-wrap: wrap;
 }
 
+.pagination[hidden] {
+  display: none !important;
+}
+
 .page-btn {
   display: inline-flex;
   align-items: center;
