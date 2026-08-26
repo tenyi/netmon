@@ -2,9 +2,29 @@ package storage
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestOpenFileEnablesWAL(t *testing.T) {
+	t.Parallel()
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "test.db")
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	var mode string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("QueryRow journal_mode: %v", err)
+	}
+	if mode != "wal" {
+		t.Errorf("expected journal_mode=wal, got %s", mode)
+	}
+}
 
 func setupTestDB(t *testing.T) *EventRepo {
 	t.Helper()
@@ -211,6 +231,68 @@ func TestSinkGetOpenEvent(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("expected nil after close, got %+v", got)
+	}
+}
+
+// TestCloseOrphanedOpen:驗證多筆歷史未結束事件時，CloseOrphanedOpen 會關閉舊事件並保留最新一筆。
+func TestCloseOrphanedOpen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	repo := NewEventRepo(db)
+
+	if _, err := repo.InsertOpen(ctx, 100, "old1"); err != nil {
+		t.Fatalf("InsertOpen 1: %v", err)
+	}
+	if _, err := repo.InsertOpen(ctx, 200, "old2"); err != nil {
+		t.Fatalf("InsertOpen 2: %v", err)
+	}
+	id3, err := repo.InsertOpen(ctx, 300, "newest")
+	if err != nil {
+		t.Fatalf("InsertOpen 3: %v", err)
+	}
+
+	closedCount, err := repo.CloseOrphanedOpen(ctx)
+	if err != nil {
+		t.Fatalf("CloseOrphanedOpen: %v", err)
+	}
+	if closedCount != 2 {
+		t.Fatalf("expected 2 closed events, got %d", closedCount)
+	}
+
+	open, err := repo.GetOpen(ctx)
+	if err != nil {
+		t.Fatalf("GetOpen: %v", err)
+	}
+	if open == nil || open.ID != id3 || open.StartedAt != 300 {
+		t.Fatalf("expected newest open event (id=%d, start=300), got %+v", id3, open)
+	}
+
+	events, err := repo.List(ctx, 0, 400)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events in total, got %d", len(events))
+	}
+	for _, e := range events {
+		if e.ID == id3 {
+			if e.EndedAt != nil {
+				t.Fatalf("newest event should remain open, got ended_at: %v", e.EndedAt)
+			}
+		} else {
+			if e.EndedAt == nil || *e.EndedAt != e.StartedAt {
+				t.Fatalf("orphaned event %d should be resolved with ended_at=started_at, got ended_at: %v", e.ID, e.EndedAt)
+			}
+		}
 	}
 }
 

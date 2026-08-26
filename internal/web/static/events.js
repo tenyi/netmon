@@ -362,5 +362,17 @@
     startAutoRefresh();
     // 「最後更新」文字每 1 秒重算 (讓「N 秒前」即時更新)
     setInterval(renderLastUpdated, 1000);
+
+    // 頁面進入背景時暫停輪詢，回到前景時立即更新並重啟輪詢
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopAutoRefresh();
+      } else {
+        if (autoRefreshEnabled) {
+          refresh();
+          startAutoRefresh();
+        }
+      }
+    });
   });
 })();

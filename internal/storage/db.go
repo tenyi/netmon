@@ -6,20 +6,26 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "github.com/glebarez/go-sqlite"
 )
 
 // Open 開啟 SQLite 資料庫，必要時建立父目錄。
 func Open(path string) (*sql.DB, error) {
+	dsn := path
 	if path != ":memory:" {
 		dir := filepath.Dir(path)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("建立資料庫目錄失敗: %w", err)
 		}
+		// 啟用 WAL 模式與 busy_timeout (5 秒)，防止並發讀寫發生鎖定 (SQLITE_BUSY)
+		if !strings.Contains(dsn, "?") {
+			dsn += "?_pragma=journal_mode(wal)&_pragma=busy_timeout(5000)&_pragma=synchronous(normal)"
+		}
 	}
 
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("開啟資料庫失敗: %w", err)
 	}

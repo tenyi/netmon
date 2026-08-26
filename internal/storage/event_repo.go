@@ -53,12 +53,12 @@ func (r *EventRepo) CloseOpen(ctx context.Context, endedAt int64) error {
 	return nil
 }
 
-// List 查詢 started_at 落在 [from, to] 內的所有事件,依 started_at DESC 排序。
+// List 查詢 started_at 落在 [from, to] 內的所有事件,依 started_at DESC 排序 (安全上限 5000 筆)。
 func (r *EventRepo) List(ctx context.Context, from, to int64) ([]Event, error) {
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, started_at, ended_at, reason FROM events
 		 WHERE started_at >= ? AND started_at <= ?
-		 ORDER BY started_at DESC`,
+		 ORDER BY started_at DESC LIMIT 5000`,
 		from, to,
 	)
 	if err != nil {
@@ -173,4 +173,23 @@ func (r *EventRepo) GetOpen(ctx context.Context) (*Event, error) {
 		e.EndedAt = &v
 	}
 	return &e, nil
+}
+
+// CloseOrphanedOpen 自動關閉除最新一筆外的歷史孤兒未結束事件（設 ended_at = started_at），
+// 確保資料庫中至多只保留一筆進行中的斷線事件。
+func (r *EventRepo) CloseOrphanedOpen(ctx context.Context) (int64, error) {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE events SET ended_at = started_at
+		 WHERE ended_at IS NULL AND id NOT IN (
+			 SELECT id FROM events WHERE ended_at IS NULL ORDER BY started_at DESC LIMIT 1
+		 )`,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("關閉孤兒斷線事件失敗: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("取得受影響列數失敗: %w", err)
+	}
+	return n, nil
 }

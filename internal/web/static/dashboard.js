@@ -324,6 +324,10 @@
       applyStatusToUI(status);
     } catch (e) {
       console.error("status refresh failed", e);
+      // 後端中斷連線時的反饋
+      applyStatusToUI({ unknown: true, gateway_ip: "—" });
+      const kpiMeta = document.getElementById("kpi-status-meta");
+      if (kpiMeta) kpiMeta.textContent = "與伺服器連線中斷";
     }
   }
 
@@ -362,6 +366,26 @@
     refreshRangeData();
   }
 
+  let statusTimer = null;
+  let rangeTimer = null;
+
+  function startPolling() {
+    stopPolling();
+    statusTimer = setInterval(refreshStatus, 5000);
+    rangeTimer = setInterval(refreshRangeData, 5000);
+  }
+
+  function stopPolling() {
+    if (statusTimer) {
+      clearInterval(statusTimer);
+      statusTimer = null;
+    }
+    if (rangeTimer) {
+      clearInterval(rangeTimer);
+      rangeTimer = null;
+    }
+  }
+
   // ---------- 啟動 ----------
   document.addEventListener("DOMContentLoaded", () => {
     window.addEventListener("netmon:rangechange", onRangeChange);
@@ -370,8 +394,17 @@
     }
     refreshStatus();
     refreshRangeData();
-    setInterval(refreshStatus, 5000);
-    // 區間資料也每 5 秒重抓,搭配 slideRange 讓 preset 區間隨時間滑動
-    setInterval(refreshRangeData, 5000);
+    startPolling();
+
+    // 頁面進入背景時暫停輪詢，回到前景時立即更新並重啟輪詢
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        refreshStatus();
+        refreshRangeData();
+        startPolling();
+      }
+    });
   });
 })();

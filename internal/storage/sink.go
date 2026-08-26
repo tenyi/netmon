@@ -41,6 +41,9 @@ func (s *Sink) OnStats(ctx context.Context, bucketStart int64, latencyAvgMs, los
 // GetOpenEvent 回傳目前未結束的斷線事件;沒有時回 (nil, nil)。
 // 供 monitor 重啟時 reconciliation(搭配 monitor.OpenEventInspector)。
 func (s *Sink) GetOpenEvent(ctx context.Context) (*monitor.OpenEvent, error) {
+	// 自動修復多餘的歷史孤兒 open events
+	_, _ = s.events.CloseOrphanedOpen(ctx)
+
 	e, err := s.events.GetOpen(ctx)
 	if err != nil {
 		return nil, err
