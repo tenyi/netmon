@@ -92,7 +92,7 @@ Web 前端模板與靜態資源（`internal/web/templates/`、`internal/web/stat
 | `GET /` | Dashboard 儀表板（KPI、延遲與遺失率圖表） |
 | `GET /events` | 事件歷史頁面 |
 | `GET /api/status` | 即時連線狀態 JSON（包含當前延遲、遺失率與狀態） |
-| `GET /api/events?from=&to=&status=&page=&page_size=` | 事件歷史清單 JSON（支援時間範圍、狀態 `all`/`ongoing`/`resolved`、分頁，回傳含 `X-Total-Count` header） |
+| `GET /api/events?from=&to=&status=&limit=&offset=` | 事件歷史清單 JSON（支援時間範圍、狀態 `all`/`ongoing`/`resolved`、分頁，回傳含 `X-Total-Count` header） |
 | `GET /api/stats?from=&to=&granularity=` | 統計數據 JSON（支援指定彙總顆粒度 `granularity`，如 `5m`, `1h`） |
 
 ## 授權

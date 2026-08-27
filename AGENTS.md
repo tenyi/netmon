@@ -9,7 +9,7 @@ Always reply in zh-TW.
 
 ## 技術堆疊 (已固定於 `go.mod`)
 
-- **Web**: `gin-gonic/gin` v1.12.0,前端用 `html/template` 渲染 + vanilla JS + Chart.js (CDN,jsdelivr)
+- **Web**: `gin-gonic/gin` v1.12.0,前端用 `html/template` 渲染 + vanilla JS + Chart.js (vendor embed v4.4.7,免 CDN)
 - **ICMP**: `go-ping/ping` v1.2.0 (raw socket,需 admin/root)
 - **SQLite**: `glebarez/go-sqlite` v1.22.0 (純 Go,`CGO_ENABLED=0` 編譯)
 - **CLI**: `spf13/cobra` v1.10.2
@@ -87,7 +87,7 @@ GATEWAY_IP=192.168.1.1
 PING_INTERVAL=1s           # 預設 1s
 PING_TIMEOUT=2s            # 預設 2s,給 go-ping 的 timeout
 STATS_INTERVAL=1m          # 預設 1m,stats bucket 大小
-WEB_ADDR=:8080
+WEB_ADDR=127.0.0.1:8080   # 預設 127.0.0.1:8080 (只綁本機)
 DB_PATH=./data/netmon.db
 RETENTION_DAYS=30          # 至少 1
 ```
@@ -121,14 +121,14 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 | `GET /static/*` | `http.FS` 服務 `static/` 子樹 |
 
 前端:
-- **Chart.js 從 CDN 載入** (`https://cdn.jsdelivr.net/npm/chart.js`),無離線 fallback。需要內網部署時請改成本地檔。
+- **Chart.js 本地嵌入** (vendor v4.4.7,由 `go:embed` 打包),完全支援離線/內網環境。
 - `dashboard.js` 每 **5 秒**輪詢 `/api/status` + `/api/stats`,用 Chart.js 畫 latency / loss 兩張折線圖。
-- `events.js` 載入時抓一次 `/api/events` 過去 24 小時資料,渲染表格。
+- `events.js` 載入時抓一次 `/api/events` 過去 24 小時資料,渲染表格(支援狀態篩選與分頁)。
 - 模板用 `html/template` + `gin.H` 注入 `Title`、`ActiveNav`。Template 檔案內容用 `{{define "dashboard.html"}}...{{end}}` 包裹,以便 `template.ParseFS` 載入。
 
 ## 跨平台注意事項
 
-- **ICMP 需要管理員權限**: Windows / Linux / macOS 開 raw socket 都需 admin/root;若未具備,`ICMPPinger` 仍會跑但 `ping.Run()` 會回錯,`monitor` 只 log 不終止 (Web 仍可開)。
+- **ICMP 支援智慧型探測**: 優先嘗試非特權 UDP ICMP,遭遇權限不足時自動回退至 raw socket (Windows / Linux / macOS 若需 raw socket 仍需 admin/root);若未具備,`monitor` 只 log 不終止 (Web 仍可開)。
 - **維持 `CGO_ENABLED=0`**: 不要換成 `mattn/go-sqlite` 等 CGo driver。
 - **路徑**: 一律 `filepath.Join`/`filepath.Dir`,`storage.Open` 會自動 `MkdirAll` 父目錄 (`:memory:` 除外)。
 - **時間格式**: DB 與 API 一律存 unix ms (int64),前端 `new Date(ms).toLocaleString("zh-TW")`。不要在後端做時區字串轉換。
@@ -148,4 +148,3 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 - `EventRepo.CloseOpen` 用「最新一筆未結束」假設;若要嚴謹的「一對一」事件,需改成 `InsertOpen` 回傳 ID 並由 monitor 持有,`CloseOpen(ctx, id, endedAt)` 才關該筆
 - `ICMPPinger.Ping` 每次新建 `ping.NewPinger`,若要降到秒級以下的高頻監控,可改為長連線 + `OnRecv` callback
 - `cmd/serve.go` 同時掛在 root 與 `serve` subcommand,輸出 `cobra` help 時 `netmon -h` 與 `netmon serve -h` 行為不完全一致
-- Chart.js 走 CDN,離線環境需替換
