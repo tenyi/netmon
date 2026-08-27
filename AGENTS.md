@@ -21,10 +21,12 @@ Always reply in zh-TW.
 ```powershell
 go run .                       # 啟動 (讀取 .env,等同 go run . serve)
 go build -o netmon.exe .       # 編譯當前平台
-go test ./...                  # 全部測試
+go test ./...                  # 全部 Go 測試
 go test -run TestMonitor ./internal/monitor   # 單一測試
 go vet ./...
 gofmt -s -w .
+
+cd internal\web\static; npm test   # 前端 JS 測試 (node --test, 零外部依賴)
 
 # 跨平台 release
 $env:GOOS="linux";   $env:GOARCH="amd64"; go build -o dist/netmon-linux-amd64 .
@@ -122,9 +124,10 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 
 前端:
 - **Chart.js 本地嵌入** (vendor v4.4.7,由 `go:embed` 打包),完全支援離線/內網環境。
-- `dashboard.js` 每 **5 秒**輪詢 `/api/status` + `/api/stats`,用 Chart.js 畫 latency / loss 兩張折線圖。
-- `events.js` 載入時抓一次 `/api/events` 過去 24 小時資料,渲染表格(支援狀態篩選與分頁)。
-- 模板用 `html/template` + `gin.H` 注入 `Title`、`ActiveNav`。Template 檔案內容用 `{{define "dashboard.html"}}...{{end}}` 包裹,以便 `template.ParseFS` 載入。
+- `kpi.js` 是前端共用純函式模組 (IIFE + dual-mode `module.exports` + `window.__netmonKpi`),提供 `latencyKpi` / `longestDisconnection` / `makeGuardedFetch` / `buildSummaryItem`。Node 測試用 `createRequire(import.meta.url)` 載入。
+- `dashboard.js` 每 **5 秒**輪詢 `/api/status` 更新即時狀態 (透過 `makeGuardedFetch` 防止並發重疊);區間資料於日期 chip 變更時重抓 `/api/events` + `/api/stats`,用 Chart.js 畫 latency / loss 兩張折線圖。longest event KPI 用 `longestDisconnection` 過濾 clock skew。
+- `events.js` 監聽日期 chip + 狀態 chip;summary 區段用 `buildSummaryItem` + `textContent`/`createElement` 而非 `innerHTML`。
+- 模板用 `html/template` + `gin.H` 注入 `Title`、`ActiveNav`。Template 檔案內容用 `{{define "dashboard.html"}}...{{end}}` 包裹,以便 `template.ParseFS` 載入。`events.html` 需在 `events.js` 之前載入 `kpi.js` 才能用 `window.__netmonKpi`。
 
 ## 跨平台注意事項
 
@@ -139,12 +142,14 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 - 任何新增的 env 變數必須**同步**更新 `.env.example`、`config.go` 的預設值與 `LoadFromEnv()`、本檔的設定表
 - 任何 DB 欄位變更都寫進 `storage.Migrate()` (用 `IF NOT EXISTS` 保持冪等,**不 drop table**)
 - 對外暴露的 repository / monitor 方法需有對應 unit test,DB 測試用 `Open(":memory:")`
+- 前端純函式 helper 放 `kpi.js`,IIFE + dual-mode exports pattern;Node 測試用 `createRequire` 載入,測試檔放 `internal/web/static/tests/`,命名 `*.spec.test.mjs`。`package.json` 不要加 `type: module`(保持 kpi.js CJS)。
 - 註解與 log 訊息使用 **zh-TW**
-- commit 前跑 `gofmt -s -w .` 與 `go vet ./...`
-- 編譯產物 (`netmon.exe`、`netmon-nocgo.exe`、`data/`、`dist/`) 已被 `.gitignore` 排除,不要 commit
+- commit 前跑 `gofmt -s -w .` 與 `go vet ./...` 與 `cd internal/web/static && npm test`
+- 編譯產物 (`netmon.exe`、`netmon-nocgo.exe`、`data/`、`dist/`、`node_modules/`) 已被 `.gitignore` 排除,不要 commit
 
 ## 已知可改進點 (非緊急)
 
 - `EventRepo.CloseOpen` 用「最新一筆未結束」假設;若要嚴謹的「一對一」事件,需改成 `InsertOpen` 回傳 ID 並由 monitor 持有,`CloseOpen(ctx, id, endedAt)` 才關該筆
 - `ICMPPinger.Ping` 每次新建 `ping.NewPinger`,若要降到秒級以下的高頻監控,可改為長連線 + `OnRecv` callback
 - `cmd/serve.go` 同時掛在 root 與 `serve` subcommand,輸出 `cobra` help 時 `netmon -h` 與 `netmon serve -h` 行為不完全一致
+- `dashboard.js` 內 inline 純函式 (e.g. longest 計算) 應優先抽出到 `kpi.js` 集中測試

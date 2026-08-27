@@ -58,9 +58,11 @@ go run .
 ```powershell
 go run .                       # 啟動（讀取 .env，等同 go run . serve）
 go build -o netmon.exe .       # 編譯當前平台
-go test ./...                  # 執行全部測試
+go test ./...                  # 執行全部 Go 測試
 go vet ./...                   # 靜態檢查
 gofmt -s -w .                  # 格式化
+
+cd internal\web\static; npm test   # 執行前端 JS 測試 (node --test, 零外部依賴)
 ```
 
 ## 跨平台編譯

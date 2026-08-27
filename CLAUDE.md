@@ -20,10 +20,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```powershell
 go run .                       # 啟動 (讀取 .env,等同 go run . serve)
 go build -o netmon.exe .       # 編譯當前平台
-go test ./...                  # 全部測試
+go test ./...                  # 全部 Go 測試
 go test -run TestMonitor ./internal/monitor   # 單一測試
 go vet ./...
 gofmt -s -w .
+
+cd internal\web\static; npm test   # 前端 JS 測試 (node --test, 零外部依賴)
 
 # 跨平台 release
 $env:GOOS="linux";   $env:GOARCH="amd64"; go build -o dist/netmon-linux-amd64 .
@@ -60,7 +62,11 @@ netmon/
 │       ├── server.go            # embed.FS (templates + static)、路由註冊
 │       ├── handlers.go          # HTML render + 3 個 API + aggregateStats()
 │       ├── templates/           # dashboard.html / events.html (含 {{define}})
-│       └── static/              # app.css / dashboard.js / events.js
+│       └── static/
+│           ├── app.css / chart.min.js / CHARTJS.LICENSE
+│           ├── range.js / kpi.js / dashboard.js / events.js
+│           ├── package.json     # Node 測試設定 (npm test → node --test)
+│           └── tests/           # *.spec.test.mjs (前端 helper 規範測試)
 ├── .env.example                 # 範本 (commit);.env 已 gitignore
 ├── data/                        # SQLite 輸出目錄 (gitignore,保留 .gitkeep)
 ├── go.mod / go.sum
@@ -120,12 +126,13 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 | `GET /static/*` | `http.FS` 服務 `static/` 子樹 |
 
 前端:
-- **Chart.js 從 CDN 載入** (`https://cdn.jsdelivr.net/npm/chart.js`),無離線 fallback。需要內網部署時請改成本地檔。
+- **Chart.js 已 vendored** (`internal/web/static/chart.min.js` v4.4.7),透過 `go:embed` 打包,完全離線部署,無 CDN 依賴。
+- `kpi.js` 是前端共用純函式模組 (IIFE + dual-mode `module.exports` + `window.__netmonKpi`),提供 `latencyKpi` / `longestDisconnection` / `makeGuardedFetch` / `buildSummaryItem`。Node 測試用 `createRequire(import.meta.url)` 載入。
 - `range.js` 提供共用的日期區間選擇器,透過 `netmon:rangechange` CustomEvent 通知;選擇同步到 URL query string 與 sessionStorage。
-- `dashboard.js` 每 **5 秒**輪詢 `/api/status` 更新即時狀態;區間資料於日期 chip 變更時重抓 `/api/events` (無 limit,算 KPI) + `/api/stats`,用 Chart.js 畫 latency / loss 兩張折線圖,並依區間自動挑 `granularity` (≤ 6h 無 / ≤ 1d 5m / ≤ 3d 15m / ≤ 7d 1h / 其他 4h)。
-- `events.js` 監聽日期 chip + 狀態 chip;抓 `/api/events?limit=25&offset=...` (前端每頁 25 筆),從 `X-Total-Count` 讀總數;**總筆數 < 25 時隱藏分頁器**;切換日期區間時自動回到第 1 頁。
+- `dashboard.js` 每 **5 秒**輪詢 `/api/status` 更新即時狀態 (透過 `makeGuardedFetch` 防止並發重疊);區間資料於日期 chip 變更時重抓 `/api/events` (無 limit,算 KPI) + `/api/stats`,用 Chart.js 畫 latency / loss 兩張折線圖,並依區間自動挑 `granularity` (≤ 6h 無 / ≤ 1d 5m / ≤ 3d 15m / ≤ 7d 1h / 其他 4h)。longest event KPI 用 `longestDisconnection` 過濾 clock skew。
+- `events.js` 監聽日期 chip + 狀態 chip;抓 `/api/events?limit=25&offset=...` (前端每頁 25 筆),從 `X-Total-Count` 讀總數;**總筆數 < 25 時隱藏分頁器**;切換日期區間時自動回到第 1 頁;summary 區段用 `buildSummaryItem` + `textContent`/`createElement` 而非 `innerHTML`。
 - `events.js` 抬頭右側有「自動更新」開關 (預設 ON),啟用時每 5 秒重抓 events + `/api/status`;偏好持久到 `localStorage["netmon:autoRefresh:events"]`,重整保留;卡片底部顯示「最後更新:N 秒前」並在超過 3 個週期未更新時變琥珀色提示過時。
-- 模板用 `html/template` + `gin.H` 注入 `Title`、`ActiveNav`。Template 檔案內容用 `{{define "dashboard.html"}}...{{end}}` 包裹,以便 `template.ParseFS` 載入。
+- 模板用 `html/template` + `gin.H` 注入 `Title`、`ActiveNav`。Template 檔案內容用 `{{define "dashboard.html"}}...{{end}}` 包裹,以便 `template.ParseFS` 載入。`events.html` 需在 `events.js` 之前載入 `kpi.js` 才能用 `window.__netmonKpi`。
 
 ## 跨平台注意事項
 
@@ -140,9 +147,10 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 - 任何新增的 env 變數必須**同步**更新 `.env.example`、`config.go` 的預設值與 `LoadFromEnv()`、本檔的設定表
 - 任何 DB 欄位變更都寫進 `storage.Migrate()` (用 `IF NOT EXISTS` 保持冪等,**不 drop table**)
 - 對外暴露的 repository / monitor 方法需有對應 unit test,DB 測試用 `Open(":memory:")`
+- 前端純函式 helper 放 `kpi.js`,IIFE + dual-mode exports pattern;Node 測試用 `createRequire` 載入,測試檔放 `internal/web/static/tests/`,命名 `*.spec.test.mjs`。`package.json` 不要加 `type: module`(保持 kpi.js CJS)。
 - 註解與 log 訊息使用 **zh-TW**
-- commit 前跑 `gofmt -s -w .` 與 `go vet ./...`
-- 編譯產物 (`netmon.exe`、`netmon-nocgo.exe`、`data/`、`dist/`) 已被 `.gitignore` 排除,不要 commit
+- commit 前跑 `gofmt -s -w .` 與 `go vet ./...` 與 `cd internal/web/static && npm test`
+- 編譯產物 (`netmon.exe`、`netmon-nocgo.exe`、`data/`、`dist/`、`node_modules/`) 已被 `.gitignore` 排除,不要 commit
 
 ## 已知可改進點 (非緊急)
 
@@ -150,4 +158,4 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 - `EventRepo.List` 與 `ListPage` 各自發 query,若區間內事件量爆大(> 數萬筆)且前端要算 KPI,目前 dashboard 會拉回全部,可能拖累。可改成「`List` 加 max 限制 + 額外 `Summary` API 提供 count / longest / avg」兩個端點
 - `ICMPPinger.Ping` 每次新建 `ping.NewPinger`,若要降到秒級以下的高頻監控,可改為長連線 + `OnRecv` callback
 - `cmd/serve.go` 同時掛在 root 與 `serve` subcommand,輸出 `cobra` help 時 `netmon -h` 與 `netmon serve -h` 行為不完全一致
-- Chart.js 走 CDN,離線環境需替換
+- `dashboard.js` 內 inline 純函式 (e.g. longest 計算) 應優先抽出到 `kpi.js` 集中測試,目前仍有少數 DOM-coupled 邏輯 (e.g. `formatBucketLabels`) 未抽
