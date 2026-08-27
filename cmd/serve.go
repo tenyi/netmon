@@ -86,7 +86,21 @@ func runServe() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	go mon.Run(ctx)
+	// monitor goroutine 透過 monDone channel 通知 Run 已返回。
+	// Shutdown 流程會在關閉 http server 後等它,確保 flushPending()
+	// 寫完最後一筆才 close DB,避免 sink 在 DB 關閉後仍嘗試寫入。
+	// 同時補上 panic recovery,background goroutine 崩潰只 log,不連帶整個 process。
+	monDone := make(chan struct{})
+	go func() {
+		defer close(monDone)
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("monitor 迴圈發生 panic: %v", r)
+			}
+		}()
+		mon.Run(ctx)
+	}()
+
 	cleanup := storage.StartCleanup(ctx, db, cfg.RetentionDays)
 
 	engine := web.New(web.Deps{
@@ -98,28 +112,42 @@ func runServe() error {
 
 	srv := newServer(cfg.WebAddr, engine)
 
+	// 統一收集關閉觸發:信號或 Web server 錯誤都會送到同一個 select,
+	// 確保只走一條 shutdown 路徑,避免對已關閉的 server 重複呼叫 Shutdown。
+	srvErr := make(chan error, 1)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
 	go func() {
 		log.Printf("Web 服務啟動於 %s", cfg.WebAddr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Printf("Web 服務錯誤: %v", err)
-			cancel()
+			srvErr <- err
+			return
 		}
+		srvErr <- nil
 	}()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	select {
+	case sig := <-sigCh:
+		log.Printf("收到信號 %v,正在關閉服務...", sig)
+	case err := <-srvErr:
+		if err != nil {
+			log.Printf("Web 服務錯誤: %v", err)
+		} else {
+			log.Println("Web 服務已停止,正在關閉服務...")
+		}
+	}
 
-	log.Println("正在關閉服務...")
 	cancel()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
+	if err := srv.Shutdown(shutdownCtx); err != nil && err != http.ErrServerClosed {
 		log.Printf("Web 服務關閉錯誤: %v", err)
 	}
 
 	cleanup.Wait()
+	<-monDone
 	log.Println("服務已停止")
 	return nil
 }
