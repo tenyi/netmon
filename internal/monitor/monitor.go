@@ -90,6 +90,9 @@ func (m *Monitor) runOnce(ctx context.Context) {
 	if err != nil {
 		log.Printf("ping 錯誤: %v（請確認是否以管理員權限執行）", err)
 	}
+	// ctx 已取消時,本次 ping 的 !ok 多半來自 shutdown,語意上不該被當成真實斷線,
+	// 否則 sink 在 OnDisconnect(OnRecover) 內會因 ctx 失敗,事件從此漏掉。
+	ctxCanceled := ctx.Err() != nil
 
 	checkAt := now.UnixMilli()
 	m.recordSample(now, ok, latency)
@@ -117,7 +120,9 @@ func (m *Monitor) runOnce(ctx context.Context) {
 			m.state = stateOnline
 			if openEvt != nil {
 				// 斷線在監控停機期間已恢復:補記恢復事件
-				ops = append(ops, pendingOp{kind: opRecover, at: checkAt})
+				if !ctxCanceled {
+					ops = append(ops, pendingOp{kind: opRecover, at: checkAt})
+				}
 			}
 		} else {
 			m.state = stateOffline
@@ -130,12 +135,14 @@ func (m *Monitor) runOnce(ctx context.Context) {
 				}
 			} else {
 				m.openStartedAt = checkAt
-				ops = append(ops, pendingOp{kind: opDisconnect, at: checkAt, reason: reason})
+				if !ctxCanceled {
+					ops = append(ops, pendingOp{kind: opDisconnect, at: checkAt, reason: reason})
+				}
 			}
 			m.openReason = reason
 		}
 	case stateOnline:
-		if !ok {
+		if !ok && !ctxCanceled {
 			m.state = stateOffline
 			reason := disconnectReason(err)
 			m.openReason = reason
@@ -143,7 +150,7 @@ func (m *Monitor) runOnce(ctx context.Context) {
 			ops = append(ops, pendingOp{kind: opDisconnect, at: checkAt, reason: reason})
 		}
 	case stateOffline:
-		if ok {
+		if ok && !ctxCanceled {
 			m.state = stateOnline
 			m.openReason = ""
 			m.openStartedAt = 0
