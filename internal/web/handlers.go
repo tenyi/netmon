@@ -64,14 +64,9 @@ func (h *handler) apiEvents(c *gin.Context) {
 
 	ctx := c.Request.Context()
 	if limit > 0 {
-		events, err := h.deps.Events.ListPage(ctx, from, to, limit, offset, status)
+		events, total, err := h.deps.Events.ListPageWithCount(ctx, from, to, limit, offset, status)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "查詢事件失敗"})
-			return
-		}
-		total, err := h.deps.Events.Count(ctx, from, to, status)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "查詢事件總數失敗"})
 			return
 		}
 		c.Header("X-Total-Count", strconv.FormatInt(total, 10))
@@ -134,7 +129,19 @@ func (h *handler) apiStats(c *gin.Context) {
 		return
 	}
 
-	stats, err := h.deps.Stats.List(c.Request.Context(), from, to)
+	// limit <= 0 表示使用預設 DefaultStatsListLimit (1024 筆),避免惡意範圍拉走過多資料。
+	// 可用 ?limit=N 顯式調整。
+	limit := 0
+	if v := c.Query("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit 格式無效"})
+			return
+		}
+		limit = n
+	}
+
+	stats, err := h.deps.Stats.List(c.Request.Context(), from, to, limit)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "查詢統計失敗"})
 		return

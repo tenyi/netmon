@@ -6,6 +6,9 @@ import (
 	"fmt"
 )
 
+// DefaultStatsListLimit 為 StatsRepo.List 預設上限,保護查詢端避免單次回傳過大。
+const DefaultStatsListLimit = 1024
+
 // StatsRepo 管理 stats 表的讀寫。
 type StatsRepo struct {
 	db *sql.DB
@@ -33,13 +36,17 @@ func (r *StatsRepo) Upsert(ctx context.Context, stat Stat) error {
 	return nil
 }
 
-// List 查詢 bucket_start 落在 [from, to] 內的統計。
-func (r *StatsRepo) List(ctx context.Context, from, to int64) ([]Stat, error) {
+// List 查詢 bucket_start 落在 [from, to] 內的統計,最多 limit 筆。
+// limit <= 0 時使用 DefaultStatsListLimit (1024),避免 handler 一口氣拉回大量 bucket。
+func (r *StatsRepo) List(ctx context.Context, from, to int64, limit int) ([]Stat, error) {
+	if limit <= 0 {
+		limit = DefaultStatsListLimit
+	}
 	rows, err := r.db.QueryContext(ctx,
 		`SELECT id, bucket_start, latency_avg_ms, loss_pct, sample_count FROM stats
 		 WHERE bucket_start >= ? AND bucket_start <= ?
-		 ORDER BY bucket_start ASC`,
-		from, to,
+		 ORDER BY bucket_start ASC LIMIT ?`,
+		from, to, limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("查詢統計失敗: %w", err)
