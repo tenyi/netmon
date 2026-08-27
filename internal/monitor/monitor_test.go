@@ -312,3 +312,50 @@ func TestMonitorStatsBucket(t *testing.T) {
 		t.Fatalf("expected stats to be flushed, got %d", len(sink.stats))
 	}
 }
+
+
+// TestMonitorSkipsDisconnectOnCtxCancelled:ctx 已取消時 runOnce 內的 !ok 不該被當成真實斷線並寫入 sink。
+func TestMonitorSkipsDisconnectOnCtxCancelled(t *testing.T) {
+	sink := &fakeSink{}
+	mon := New(newTestConfig(), sink, &sequencePinger{results: []pingResult{
+		{latency: 10 * time.Millisecond, ok: true},
+		{ok: false},
+	}})
+	mon.runOnce(context.Background())
+	if st := mon.Status(); !st.Online {
+		t.Fatalf("setup: 預期 online,實際 %+v", st)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	mon.runOnce(ctx)
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.disconnects) != 0 || len(sink.recovers) != 0 {
+		t.Fatalf("ctx 已取消時不應寫入,disconnects=%d recovers=%d", len(sink.disconnects), len(sink.recovers))
+	}
+}
+
+// TestMonitorSkipsRecoverOnCtxCancelled:ctx 已取消時 runOnce 內的 ok 不該補 OnRecover。
+func TestMonitorSkipsRecoverOnCtxCancelled(t *testing.T) {
+	sink := &fakeSink{}
+	mon := New(newTestConfig(), sink, &sequencePinger{results: []pingResult{
+		{ok: false},
+		{latency: 10 * time.Millisecond, ok: true},
+	}})
+	mon.runOnce(context.Background())
+	if st := mon.Status(); st.Online || st.OpenEvent == nil {
+		t.Fatalf("setup: 預期 offline 帶 open event,實際 %+v", st)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	mon.runOnce(ctx)
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.recovers) != 0 {
+		t.Fatalf("ctx 已取消時不應補 recover,recovers=%d", len(sink.recovers))
+	}
+}

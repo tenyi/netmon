@@ -193,3 +193,73 @@ func (r *EventRepo) CloseOrphanedOpen(ctx context.Context) (int64, error) {
 	}
 	return n, nil
 }
+
+// ListPageWithCount 在單一 read transaction 內同時取得分頁事件與總數,
+// 確保兩者來自同一個 SQLite snapshot,避免在 ListPage 與 Count 之間有 insert 時造成 X-Total-Count 與實際頁數不一致。
+// limit 與 offset 由呼叫端保證為非負整數;limit 為 0 時視同無上限。
+// status 必須為合法 EventStatus(包含空/all),否則回錯。
+func (r *EventRepo) ListPageWithCount(ctx context.Context, from, to int64, limit, offset int, status EventStatus) ([]Event, int64, error) {
+	if !status.valid() {
+		return nil, 0, fmt.Errorf("事件狀態過濾值無效: %q", status)
+	}
+	if limit < 0 || offset < 0 {
+		return nil, 0, fmt.Errorf("limit 與 offset 必須為非負整數")
+	}
+
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, 0, fmt.Errorf("開啟交易失敗: %w", err)
+	}
+	// Commit 後 defer Rollback 是 no-op,出錯時保證自動 rollback。
+	defer func() { _ = tx.Rollback() }()
+
+	listQuery := `SELECT id, started_at, ended_at, reason FROM events
+		WHERE started_at >= ? AND started_at <= ?` + status.whereClause() + `
+		ORDER BY started_at DESC`
+	listArgs := []any{from, to}
+	if limit > 0 {
+		listQuery += ` LIMIT ? OFFSET ?`
+		listArgs = append(listArgs, limit, offset)
+	}
+
+	rows, err := tx.QueryContext(ctx, listQuery, listArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("查詢事件失敗: %w", err)
+	}
+	var events []Event
+	for rows.Next() {
+		var e Event
+		var endedAt sql.NullInt64
+		if err := rows.Scan(&e.ID, &e.StartedAt, &endedAt, &e.Reason); err != nil {
+			rows.Close()
+			return nil, 0, fmt.Errorf("讀取事件列失敗: %w", err)
+		}
+		if endedAt.Valid {
+			v := endedAt.Int64
+			e.EndedAt = &v
+		}
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, 0, fmt.Errorf("迭代事件列失敗: %w", err)
+	}
+	rows.Close()
+
+	var total int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM events WHERE started_at >= ? AND started_at <= ?`+status.whereClause(),
+		from, to,
+	).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("查詢事件總數失敗: %w", err)
+	}
+
+	if events == nil {
+		events = []Event{}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, 0, fmt.Errorf("提交交易失敗: %w", err)
+	}
+	return events, total, nil
+}

@@ -87,6 +87,25 @@ func TestEventRepoInsertCloseList(t *testing.T) {
 	}
 }
 
+// TestEventRepoCloseOpenErrNoOpen 釘住 spec:沒有未結束事件時 CloseOpen 必須回錯。
+// 這保證呼叫端若先 GetOpen 判斷 nil,可拿到明確語意而非靜默成功。
+func TestEventRepoCloseOpenErrNoOpen(t *testing.T) {
+	t.Parallel()
+	repo := setupTestDB(t)
+	ctx := context.Background()
+
+	if _, err := repo.InsertOpen(ctx, 100, "x"); err != nil {
+		t.Fatalf("InsertOpen: %v", err)
+	}
+	if err := repo.CloseOpen(ctx, 100); err != nil {
+		t.Fatalf("first CloseOpen: %v", err)
+	}
+
+	if err := repo.CloseOpen(ctx, 200); err == nil {
+		t.Fatal("expected error when no open event exists")
+	}
+}
+
 // TestEventRepoListPageAndCount 驗證分頁與總數:30 筆事件,
 // 跨頁讀取應依 started_at DESC 排序,Count 與分頁總和一致。
 func TestEventRepoListPageAndCount(t *testing.T) {
@@ -296,6 +315,46 @@ func TestCloseOrphanedOpen(t *testing.T) {
 	}
 }
 
+// TestSinkReconcileOpen 驗證 Sink.ReconcileOpen 為薄 wrapper,回傳清理筆數並具冪等性。
+func TestSinkReconcileOpen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := Migrate(db); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	events := NewEventRepo(db)
+	sink := NewSink(events, NewStatsRepo(db))
+
+	if _, err := events.InsertOpen(ctx, 100, "old"); err != nil {
+		t.Fatalf("InsertOpen 1: %v", err)
+	}
+	if _, err := events.InsertOpen(ctx, 200, "newest"); err != nil {
+		t.Fatalf("InsertOpen 2: %v", err)
+	}
+
+	n, err := sink.ReconcileOpen(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileOpen: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("expected 1 orphan closed, got %d", n)
+	}
+
+	n2, err := sink.ReconcileOpen(ctx)
+	if err != nil {
+		t.Fatalf("ReconcileOpen 2: %v", err)
+	}
+	if n2 != 0 {
+		t.Fatalf("expected 0 on second call, got %d", n2)
+	}
+}
+
 func TestStatsRepoUpsertList(t *testing.T) {
 	repo := setupStatsDB(t)
 	ctx := context.Background()
@@ -317,7 +376,7 @@ func TestStatsRepoUpsertList(t *testing.T) {
 		t.Fatalf("Upsert update: %v", err)
 	}
 
-	stats, err := repo.List(ctx, bucket-1, bucket+1)
+	stats, err := repo.List(ctx, bucket-1, bucket+1, 0)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -373,11 +432,105 @@ func TestCleanupPurgesOldData(t *testing.T) {
 		t.Fatalf("expected new event to remain, got %+v", oldEvents[0])
 	}
 
-	allStats, err := stats.List(ctx, 0, time.Now().UnixMilli())
+	allStats, err := stats.List(ctx, 0, time.Now().UnixMilli(), 0)
 	if err != nil {
 		t.Fatalf("List stats: %v", err)
 	}
 	if len(allStats) != 1 {
 		t.Fatalf("expected 1 remaining stat, got %d", len(allStats))
+	}
+}
+
+// TestStatsRepoListLimit 驗證 limit <= 0 套用 DefaultStatsListLimit;自訂 limit 生效。
+func TestStatsRepoListLimit(t *testing.T) {
+	t.Parallel()
+	repo := setupStatsDB(t)
+	ctx := context.Background()
+
+	base := time.Now().Truncate(time.Hour).UnixMilli()
+	for i := range 5 {
+		if err := repo.Upsert(ctx, Stat{
+			BucketStart:  base + int64(i)*60_000,
+			LatencyAvgMs: float64(i + 1),
+			LossPct:      0,
+			SampleCount:  10,
+		}); err != nil {
+			t.Fatalf("Upsert[%d]: %v", i, err)
+		}
+	}
+
+	// 自訂 limit=2:只回 2 筆
+	got, err := repo.List(ctx, 0, base+10*60_000, 2)
+	if err != nil {
+		t.Fatalf("List(2): %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2, got %d", len(got))
+	}
+
+	// limit=0 等同預設 1024;5 筆全回
+	all, err := repo.List(ctx, 0, base+10*60_000, 0)
+	if err != nil {
+		t.Fatalf("List(0): %v", err)
+	}
+	if len(all) != 5 {
+		t.Fatalf("expected 5, got %d", len(all))
+	}
+}
+
+// TestEventRepoListPageWithCount 驗證 ListPageWithCount 在單一 transaction 內同時取得分頁與總數,
+// 並對齊 status 過濾與無上限 limit (0) 兩個邊界。
+func TestEventRepoListPageWithCount(t *testing.T) {
+	t.Parallel()
+	repo := setupTestDB(t)
+	ctx := context.Background()
+
+	base := time.Now().Add(-1 * time.Hour).UnixMilli()
+	const total = 30
+	for i := range total {
+		if _, err := repo.InsertOpen(ctx, base+int64(i)*1000, "test"); err != nil {
+			t.Fatalf("InsertOpen[%d]: %v", i, err)
+		}
+	}
+
+	from := base - 1
+	to := base + int64(total)*1000 + 1
+
+	// 分頁查詢:events 與 total 同一 transaction
+	page, n, err := repo.ListPageWithCount(ctx, from, to, 10, 0, EventStatusAll)
+	if err != nil {
+		t.Fatalf("ListPageWithCount: %v", err)
+	}
+	if len(page) != 10 {
+		t.Fatalf("expected 10 events, got %d", len(page))
+	}
+	if n != int64(total) {
+		t.Fatalf("expected total %d, got %d", total, n)
+	}
+	if page[0].StartedAt != base+int64(total-1)*1000 {
+		t.Fatalf("expected newest first, got %d", page[0].StartedAt)
+	}
+
+	// limit=0 無上限,但 total 仍為全部
+	all, n2, err := repo.ListPageWithCount(ctx, from, to, 0, 0, EventStatusAll)
+	if err != nil {
+		t.Fatalf("ListPageWithCount no limit: %v", err)
+	}
+	if len(all) != total || n2 != int64(total) {
+		t.Fatalf("expected (%d,%d), got (%d,%d)", total, total, len(all), n2)
+	}
+
+	// 越界 offset:events 空但 total 仍是真實總數
+	beyond, n3, err := repo.ListPageWithCount(ctx, from, to, 10, 100, EventStatusAll)
+	if err != nil {
+		t.Fatalf("ListPageWithCount beyond: %v", err)
+	}
+	if len(beyond) != 0 || n3 != int64(total) {
+		t.Fatalf("expected (0,%d), got (%d,%d)", total, len(beyond), n3)
+	}
+
+	// 非法 status 回錯
+	if _, _, err := repo.ListPageWithCount(ctx, from, to, 10, 0, EventStatus("bogus")); err == nil {
+		t.Fatal("invalid status should error")
 	}
 }

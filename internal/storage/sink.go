@@ -39,11 +39,9 @@ func (s *Sink) OnStats(ctx context.Context, bucketStart int64, latencyAvgMs, los
 }
 
 // GetOpenEvent 回傳目前未結束的斷線事件;沒有時回 (nil, nil)。
-// 供 monitor 重啟時 reconciliation(搭配 monitor.OpenEventInspector)。
+// 供 monitor 首次確定狀態時使用(搭配 monitor.OpenEventInspector)。
+// 本函式為純讀:若 DB 存在多筆歷史孤兒未結束事件,需先呼叫 ReconcileOpen 清理。
 func (s *Sink) GetOpenEvent(ctx context.Context) (*monitor.OpenEvent, error) {
-	// 自動修復多餘的歷史孤兒 open events
-	_, _ = s.events.CloseOrphanedOpen(ctx)
-
 	e, err := s.events.GetOpen(ctx)
 	if err != nil {
 		return nil, err
@@ -52,6 +50,12 @@ func (s *Sink) GetOpenEvent(ctx context.Context) (*monitor.OpenEvent, error) {
 		return nil, nil
 	}
 	return &monitor.OpenEvent{StartedAt: e.StartedAt, Reason: e.Reason}, nil
+}
+
+// ReconcileOpen 關閉除最新一筆外的歷史孤兒未結束事件,回傳清理筆數與錯誤。
+// 設計為啟動期顯式呼叫,不是熱路徑讀取副作用。
+func (s *Sink) ReconcileOpen(ctx context.Context) (int64, error) {
+	return s.events.CloseOrphanedOpen(ctx)
 }
 
 // 確保 Sink 實作 monitor.EventSink。
