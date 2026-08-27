@@ -7,65 +7,72 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 
-// 目標 helper:guarded wrapper,並發呼叫第二次應回 "skipped"。
-function makeGuardedRefresh(refresh) {
-  let inFlight = false;
-  return async function guarded() {
-    if (inFlight) return "skipped";
-    inFlight = true;
-    try {
-      await refresh();
-      return "ok";
-    } finally {
-      inFlight = false;
-    }
-  };
-}
+const require = createRequire(import.meta.url);
+const kpi = require("../kpi.js");
+
+const { makeGuardedFetch } = kpi;
 
 test("spec: guarded refresh skip 並發第二次呼叫", async () => {
   let releaseFirst;
   const slowFetch = () => new Promise((r) => { releaseFirst = r; });
-  const guarded = makeGuardedRefresh(slowFetch);
+  const guarded = makeGuardedFetch(slowFetch);
 
-  const p1 = guarded();
-  const p2 = guarded();
+  const p1 = guarded.fetch();
+  const p2 = guarded.fetch();
 
-  assert.equal(await p2, "skipped");
+  const r2 = await p2;
+  assert.equal(r2.skipped, true);
   releaseFirst();
-  assert.equal(await p1, "ok");
+  const r1 = await p1;
+  assert.equal(r1.skipped, false);
 });
 
 test("spec: guarded refresh 在第一次完成後可再次呼叫", async () => {
   let n = 0;
-  const guarded = makeGuardedRefresh(async () => { n++; });
+  const guarded = makeGuardedFetch(async () => { n++; });
 
-  await guarded();
-  await guarded();
+  await guarded.fetch();
+  await guarded.fetch();
 
   assert.equal(n, 2, "第一次完成後第二次不應被 skip");
 });
 
 test("spec: guarded refresh 在第一次拋錯後仍釋放 flag", async () => {
-  const guarded = makeGuardedRefresh(async () => { throw new Error("boom"); });
+  const guarded = makeGuardedFetch(async () => { throw new Error("boom"); });
 
-  await assert.rejects(guarded, /boom/);
+  await assert.rejects(guarded.fetch(), /boom/);
   // flag 已釋放,第二次呼叫不應被 skip 也不應殘留 inFlight=true。
   let secondCalled = false;
-  const guarded2 = makeGuardedRefresh(async () => { secondCalled = true; });
-  await guarded2();
+  const guarded2 = makeGuardedFetch(async () => { secondCalled = true; });
+  await guarded2.fetch();
   assert.equal(secondCalled, true);
 });
 
 test("spec: 多個並發呼叫只有第一個跑,其餘被 skip", async () => {
   let releaseFirst;
   const slowFetch = () => new Promise((r) => { releaseFirst = r; });
-  const guarded = makeGuardedRefresh(slowFetch);
+  const guarded = makeGuardedFetch(slowFetch);
 
-  const ps = [guarded(), guarded(), guarded(), guarded()];
-  const results = await Promise.all([ps[1], ps[2], ps[3]]); // 先收後三個結果
-  for (const r of results) assert.equal(r, "skipped");
+  const ps = [guarded.fetch(), guarded.fetch(), guarded.fetch(), guarded.fetch()];
+  const results = await Promise.all([ps[1], ps[2], ps[3]]);
+  for (const r of results) assert.equal(r.skipped, true);
 
   releaseFirst();
-  assert.equal(await ps[0], "ok");
+  const r0 = await ps[0];
+  assert.equal(r0.skipped, false);
+});
+
+test("spec: isFetching getter 在 fetch 中為 true,完成後為 false", async () => {
+  let releaseFirst;
+  const slowFetch = () => new Promise((r) => { releaseFirst = r; });
+  const guarded = makeGuardedFetch(slowFetch);
+
+  assert.equal(guarded.isFetching, false);
+  const p = guarded.fetch();
+  assert.equal(guarded.isFetching, true);
+  releaseFirst();
+  await p;
+  assert.equal(guarded.isFetching, false);
 });

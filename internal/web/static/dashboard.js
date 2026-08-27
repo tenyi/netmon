@@ -176,18 +176,17 @@
         longestVal.textContent = "—";
         longestMeta.textContent = "區間內無斷線";
       } else {
-        const now = Date.now();
-        let longest = events[0];
-        let longestDur = (longest.ended_at || now) - longest.started_at;
-        for (const e of events) {
-          const d = (e.ended_at || now) - e.started_at;
-          if (d > longestDur) {
-            longest = e;
-            longestDur = d;
-          }
+        // longest 計算抽到 kpi.js,以集中過濾 clock skew 的規則。
+        // 對 started_at > now 的事件 (整個事件在未來) 跳過,
+        // 避免時鐘回撥或時區誤判時用巨大「虛擬 duration」污染 longest 結果。
+        const longest = window.__netmonKpi.longestDisconnection(events, Date.now());
+        if (longest) {
+          longestVal.textContent = formatDuration(longest.started_at, longest.ended_at);
+          longestMeta.textContent = `發生於 ${formatShortDateTime(longest.started_at)}`;
+        } else {
+          longestVal.textContent = "—";
+          longestMeta.textContent = "區間內事件皆為 clock skew";
         }
-        longestVal.textContent = formatDuration(longest.started_at, longest.ended_at);
-        longestMeta.textContent = `發生於 ${formatShortDateTime(longest.started_at)}`;
       }
     }
   }
@@ -318,17 +317,24 @@
   let currentRange = null;
   let isFetching = false;
 
+  // refreshStatus 透過 makeGuardedFetch 包裝,
+  // 避免慢網路下 setInterval 觸發多個 /api/status 並發重疊。
+  // 並發時第二次呼叫直接回傳 skipped,不重複發 request 也不覆蓋前一次的結果。
+  const statusFetch = window.__netmonKpi.makeGuardedFetch(async () => fetchJson("/api/status"));
   async function refreshStatus() {
+    let r;
     try {
-      const status = await fetchJson("/api/status");
-      applyStatusToUI(status);
+      r = await statusFetch.fetch();
     } catch (e) {
       console.error("status refresh failed", e);
       // 後端中斷連線時的反饋
       applyStatusToUI({ unknown: true, gateway_ip: "—" });
       const kpiMeta = document.getElementById("kpi-status-meta");
       if (kpiMeta) kpiMeta.textContent = "與伺服器連線中斷";
+      return;
     }
+    if (r.skipped) return;
+    applyStatusToUI(r.data);
   }
 
   async function refreshRangeData() {

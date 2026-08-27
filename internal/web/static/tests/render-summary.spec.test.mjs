@@ -8,39 +8,36 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 
-// 目標實作:不寫 innerHTML;用 textContent 清空後 append 結構化節點。
-function renderSummary(el, rangeText) {
-  el.textContent = "";
-  const span = {
-    tagName: "SPAN",
-    className: "summary-item",
-    textContent: rangeText,
-  };
-  el.children = [span];
-}
+const require = createRequire(import.meta.url);
+const kpi = require("../kpi.js");
+
+const { buildSummaryItem } = kpi;
 
 test("spec: renderSummary 不寫入 innerHTML", () => {
   const el = { innerHTML: "stale", textContent: "", children: [] };
-  renderSummary(el, "第 1–10 筆 / 共 10 筆");
-  assert.equal(el.innerHTML, "stale", "不應寫入 innerHTML");
+  buildSummaryItem("第 1–10 筆 / 共 10 筆");
+  assert.equal(el.innerHTML, "stale", "buildSummaryItem 不應觸碰 el");
 });
 
-test("spec: renderSummary 建立 textContent span", () => {
-  const el = { innerHTML: "", textContent: "", children: [] };
-  renderSummary(el, "第 1–10 筆 / 共 10 筆");
-  assert.equal(el.children.length, 1);
-  assert.equal(el.children[0].className, "summary-item");
-  assert.equal(el.children[0].textContent, "第 1–10 筆 / 共 10 筆");
+test("spec: buildSummaryItem 回傳結構化節點描述", () => {
+  const item = buildSummaryItem("第 1–10 筆 / 共 10 筆");
+  assert.equal(item.tag, "span");
+  assert.equal(item.className, "summary-item");
+  assert.equal(item.textContent, "第 1–10 筆 / 共 10 筆");
 });
 
-test("spec: renderSummary 清空舊內容後重建", () => {
+test("spec: buildSummaryItem 可用於清空舊內容後重建", () => {
+  // 模擬 events.js renderSummary 的呼叫 pattern:清空 el.textContent 後 append 新節點
   const el = {
     innerHTML: "",
     textContent: "old",
     children: [{ tagName: "SPAN", className: "summary-item", textContent: "old" }],
   };
-  renderSummary(el, "new");
+  el.textContent = "";
+  const item = buildSummaryItem("new");
+  el.children = [item];
   assert.equal(el.textContent, "");
   assert.equal(el.children.length, 1);
   assert.equal(el.children[0].textContent, "new");

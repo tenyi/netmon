@@ -124,7 +124,14 @@
     const rangeText = totalCount === 0
       ? "0 筆"
       : `第 ${from}–${to} 筆 / 共 ${totalCount} 筆`;
-    el.innerHTML = `<span class="summary-item">${rangeText}</span>`;
+    // 用 textContent + createElement 而非 innerHTML 注入,
+    // 與 renderTable / 其他 render* 函式一致,並避免日後插值 user 輸入時的 XSS 風險。
+    el.textContent = "";
+    const item = window.__netmonKpi.buildSummaryItem(rangeText);
+    const span = document.createElement(item.tag);
+    span.className = item.className;
+    span.textContent = item.textContent;
+    el.appendChild(span);
   }
 
   // ---------- 分頁器 ----------

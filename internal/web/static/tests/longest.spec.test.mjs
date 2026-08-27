@@ -7,25 +7,12 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createRequire } from "node:module";
 
-// 目標 helper 行為:
-//   - 整個事件在未來(started_at > now)視為 clock skew 跳過。
-//   - ended_at < started_at(資料錯誤)也跳過。
-//   - ongoing(ended_at 為 null)用 now 結算 duration。
-function longestDisconnection(events, now) {
-  let longest = null;
-  let longestDur = -Infinity;
-  for (const e of events || []) {
-    if (e.started_at > now) continue;
-    const d = (e.ended_at ?? now) - e.started_at;
-    if (d < 0) continue;
-    if (d > longestDur) {
-      longest = e;
-      longestDur = d;
-    }
-  }
-  return longest;
-}
+const require = createRequire(import.meta.url);
+const kpi = require("../kpi.js");
+
+const { longestDisconnection } = kpi;
 
 test("spec: longest 過濾 started_at > now 的 clock skew", () => {
   const events = [
