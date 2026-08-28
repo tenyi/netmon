@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/go-ping/ping"
+	"golang.org/x/net/icmp"
+	"golang.org/x/net/ipv4"
 )
 
 // Pinger 執行單次 ICMP 探測。
@@ -22,12 +24,14 @@ type Pinger interface {
 // 遇權限錯誤才回退」的順序可用 fake 測試,不需要真實 socket。
 type attempt func(ctx context.Context, privileged bool) (latency time.Duration, ok bool, err error)
 
-// ICMPPinger 使用 go-ping 進行 ICMP 探測。
+// ICMPPinger 用 golang.org/x/net/icmp 標準庫發 ICMP echo request。
 //
-// 注意:go-ping v1.2.0 的 *ping.Pinger 在一次 Run() 結束後,其內部 done
-// channel 已被 close,第二次 Run() 會立即結束而幾乎不发包,因此此處每次
-// Ping 都新建一個 *ping.Pinger(對 IP literal 而言 NewPinger 很輕量,re-
-// resolve 已因每次新建而自然避免)。不要試圖 cache 重用。
+// 為何不用 github.com/go-ping/ping:該專案已 deprecated (無 maintainer),
+// go vet 持續警告。x/net/icmp 是 Go 官方標準庫,生命週期綁定 Go 版本。
+//
+// 注意:每次 Ping 都新建 ICMP socket (對 IP literal 而言 ListenPacket
+// 很輕量),不要試圖 cache 重用 — UDP/ICMP 模式下的 socket 狀態會跨呼叫
+// 累積,raw socket 也可能受系統狀態影響。
 type ICMPPinger struct {
 	addr    string
 	timeout time.Duration
@@ -106,42 +110,89 @@ func shouldRetryPrivileged(err error) bool {
 		strings.Contains(s, "no implementation for it")
 }
 
-// goPingAttempt 實際呼叫 go-ping 完成單發 ping。
+// protocolICMP 是 ICMPv4 的 protocol number (RFC 792),用於 icmp.ParseMessage。
+const protocolICMP = 1
+
+// goPingAttempt 實際呼叫 x/net/icmp 完成單發 ping。
+//
+// privileged=true:用 raw socket ("ip4:icmp") — Windows / Linux root。
+// privileged=false:用 UDP datagram socket ("udp4") — Linux/macOS 免 root。
 func (p *ICMPPinger) goPingAttempt(ctx context.Context, privileged bool) (time.Duration, bool, error) {
-	pr, err := ping.NewPinger(p.addr)
+	network := "ip4:icmp"
+	bindAddr := "0.0.0.0"
+	if !privileged {
+		network = "udp4"
+		bindAddr = "0.0.0.0:0" // UDP socket 需 bind port,讓 kernel 分配
+	}
+
+	conn, err := icmp.ListenPacket(network, bindAddr)
 	if err != nil {
-		return 0, false, fmt.Errorf("建立 pinger 失敗: %w", err)
+		return 0, false, fmt.Errorf("icmp listen (%s) 失敗: %w", network, err)
+	}
+	defer conn.Close()
+
+	// deadline:優先用 ctx,否則 fallback 到 p.timeout
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		deadline = time.Now().Add(p.timeout)
+	}
+	if err := conn.SetReadDeadline(deadline); err != nil {
+		return 0, false, fmt.Errorf("set read deadline 失敗: %w", err)
 	}
 
-	pr.SetPrivileged(privileged)
-	pr.Count = 1
-	pr.Timeout = p.timeout
+	dst, err := net.ResolveIPAddr("ip4", p.addr)
+	if err != nil {
+		return 0, false, fmt.Errorf("解析 %s 失敗: %w", p.addr, err)
+	}
 
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			pr.Stop()
-		case <-done:
+	// 組 echo request。ID 用 PID 區隔不同 process,Seq 用 1 (單發)。
+	echo := icmp.Echo{
+		ID:   os.Getpid() & 0xffff,
+		Seq:  1,
+		Data: []byte("netmon"),
+	}
+	msg := icmp.Message{
+		Type: ipv4.ICMPTypeEcho,
+		Code: 0,
+		Body: &echo,
+	}
+	wb, err := msg.Marshal(nil)
+	if err != nil {
+		return 0, false, fmt.Errorf("marshal icmp 失敗: %w", err)
+	}
+
+	sent := time.Now()
+	if privileged {
+		// raw socket:dst 為 *net.IPAddr
+		if _, err := conn.WriteTo(wb, dst); err != nil {
+			return 0, false, fmt.Errorf("send icmp 失敗: %w", err)
 		}
-	}()
-
-	if err := pr.Run(); err != nil {
-		close(done)
-		return 0, false, err
-	}
-	close(done)
-
-	stats := pr.Statistics()
-	if stats.PacketsRecv == 0 {
-		return 0, false, nil
+	} else {
+		// udp4 socket:dst 需包成 *net.UDPAddr (digineo/go-ping 內部也是這樣處理)
+		if _, err := conn.WriteTo(wb, &net.UDPAddr{IP: dst.IP, Zone: dst.Zone}); err != nil {
+			return 0, false, fmt.Errorf("send icmp 失敗: %w", err)
+		}
 	}
 
-	var latency time.Duration
-	if stats.AvgRtt > 0 {
-		latency = stats.AvgRtt
-	} else if len(stats.Rtts) > 0 {
-		latency = stats.Rtts[0]
+	// Read loop:過濾 echo reply 且 ID/Seq 對應自己 request
+	rb := make([]byte, 1500)
+	for {
+		n, _, err := conn.ReadFrom(rb)
+		if err != nil {
+			// deadline 到期會回 "i/o timeout"
+			return 0, false, err
+		}
+		rm, err := icmp.ParseMessage(protocolICMP, rb[:n])
+		if err != nil {
+			continue
+		}
+		if rm.Type != ipv4.ICMPTypeEchoReply {
+			continue
+		}
+		reply, ok := rm.Body.(*icmp.Echo)
+		if !ok || reply.ID != echo.ID || reply.Seq != echo.Seq {
+			continue
+		}
+		return time.Since(sent), true, nil
 	}
-	return latency, true, nil
 }
