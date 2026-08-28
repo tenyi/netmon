@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 技術堆疊 (已固定於 `go.mod`)
 
 - **Web**: `gin-gonic/gin` v1.12.0,前端用 `html/template` 渲染 + vanilla JS + Chart.js (CDN,jsdelivr)
-- **ICMP**: `go-ping/ping` v1.2.0 (raw socket,需 admin/root)
+- **ICMP**: `golang.org/x/net/icmp` (官方標準庫;privileged 走 raw socket,非特權走 UDP datagram,自動 fallback)
 - **SQLite**: `glebarez/go-sqlite` v1.22.0 (純 Go,`CGO_ENABLED=0` 編譯)
 - **CLI**: `spf13/cobra` v1.10.2
 - **Config**: `joho/godotenv` v1.5.1 + `os.Getenv`
@@ -47,7 +47,7 @@ netmon/
 │   ├── config/config.go         # Config struct、LoadFromEnv()、驗證
 │   ├── monitor/
 │   │   ├── monitor.go           # 狀態機 (unknown/online/offline)、ping 迴圈、stats bucket
-│   │   ├── pinger.go            # Pinger interface + ICMPPinger (go-ping)
+│   │   ├── pinger.go            # Pinger interface + ICMPPinger (x/net/icmp)
 │   │   ├── sink.go              # EventSink / StatusProvider interface、Status / OpenEvent 結構
 │   │   └── monitor_test.go      # 用 fakeSink + sequencePinger 測試狀態轉換
 │   ├── storage/
@@ -90,7 +90,7 @@ netmon/
 ```
 GATEWAY_IP=192.168.1.1
 PING_INTERVAL=1s           # 預設 1s
-PING_TIMEOUT=2s            # 預設 2s,給 go-ping 的 timeout
+PING_TIMEOUT=2s            # 預設 2s,給 icmp socket 的 read deadline
 STATS_INTERVAL=1m          # 預設 1m,stats bucket 大小
 WEB_ADDR=:8080
 DB_PATH=./data/netmon.db
@@ -156,6 +156,6 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 
 - `EventRepo.CloseOpen` 用「最新一筆未結束」假設;若要嚴謹的「一對一」事件,需改成 `InsertOpen` 回傳 ID 並由 monitor 持有,`CloseOpen(ctx, id, endedAt)` 才關該筆
 - `EventRepo.List` 與 `ListPage` 各自發 query,若區間內事件量爆大(> 數萬筆)且前端要算 KPI,目前 dashboard 會拉回全部,可能拖累。可改成「`List` 加 max 限制 + 額外 `Summary` API 提供 count / longest / avg」兩個端點
-- `ICMPPinger.Ping` 每次新建 `ping.NewPinger`,若要降到秒級以下的高頻監控,可改為長連線 + `OnRecv` callback
+- `ICMPPinger.Ping` 每次新建 `icmp.ListenPacket`,若要降到秒級以下的高頻監控,可改為長連線並改用非同步 ReadFrom
 - `cmd/serve.go` 同時掛在 root 與 `serve` subcommand,輸出 `cobra` help 時 `netmon -h` 與 `netmon serve -h` 行為不完全一致
 - `dashboard.js` 內 inline 純函式 (e.g. longest 計算) 應優先抽出到 `kpi.js` 集中測試,目前仍有少數 DOM-coupled 邏輯 (e.g. `formatBucketLabels`) 未抽
