@@ -79,8 +79,17 @@ func (p *ICMPPinger) Ping(ctx context.Context) (time.Duration, bool, error) {
 	return lat, ok, err
 }
 
-// shouldRetryPrivileged 回報 err 是否屬於「非特權 ping 權限不足」,該情況
-// 應回退到 raw socket。純函式,可獨立測試。
+// shouldRetryPrivileged 回報 err 是否屬於「非特權 ping 不可用,該回退到 raw socket」。
+//
+// 涵蓋:
+//   - Linux/macOS 權限錯誤 (os.ErrPermission、"operation not permitted"、
+//     "permission denied")。
+//   - Windows 沒有 UDP ICMP datagram 路徑,SetPrivileged(false) 會回
+//     "The requested protocol has not been configured into the system,
+//     or no implementation for it exists." — 此時也應回退到 raw socket,
+//     否則會被鎖死成「永遠走非特權」每次都失敗。
+//
+// 純函式,可獨立測試。
 func shouldRetryPrivileged(err error) bool {
 	if err == nil {
 		return false
@@ -91,7 +100,10 @@ func shouldRetryPrivileged(err error) bool {
 	s := strings.ToLower(err.Error())
 	return strings.Contains(s, "operation not permitted") ||
 		strings.Contains(s, "permission denied") ||
-		strings.Contains(s, "access is denied")
+		strings.Contains(s, "access is denied") ||
+		// Windows:非特權走 UDP ICMP 失敗時的系統錯誤字串
+		strings.Contains(s, "protocol has not been configured") ||
+		strings.Contains(s, "no implementation for it")
 }
 
 // goPingAttempt 實際呼叫 go-ping 完成單發 ping。

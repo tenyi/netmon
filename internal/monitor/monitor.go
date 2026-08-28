@@ -88,7 +88,11 @@ func (m *Monitor) runOnce(ctx context.Context) {
 	now := time.Now()
 	latency, ok, err := m.pinger.Ping(ctx)
 	if err != nil {
-		log.Printf("ping 錯誤: %v（請確認是否以管理員權限執行）", err)
+		// 已在 ICMPPinger 內嘗試非特權 → privileged 的 fallback (Linux/macOS 權限不足、
+		// Windows protocol not configured 都會回退)。若仍印出此錯誤,表示 fallback
+		// 後仍失敗 — 多為 Windows 防火牆 / GPO 阻擋 ICMP,或 socket 系統限制。
+		// 不再加誤導性「請確認 admin」後綴,直接印原始錯誤供排查。
+		log.Printf("ping 錯誤: %v", err)
 	}
 	// ctx 已取消時,本次 ping 的 !ok 多半來自 shutdown,語意上不該被當成真實斷線,
 	// 否則 sink 在 OnDisconnect(OnRecover) 內會因 ctx 失敗,事件從此漏掉。

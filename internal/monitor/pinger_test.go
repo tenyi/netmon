@@ -10,6 +10,9 @@ import (
 
 // shouldRetryPrivileged 是純函式:判斷一次 ping 失敗是否屬於「非特權模式
 // 權限不足」,若是則應回退到 raw socket(true)。
+// 同時涵蓋 Windows 環境:非特權走 UDP ICMP 會被系統拒絕
+// ("protocol has not been configured" / "no implementation for it"),
+// 也要回退到 raw socket,否則會被鎖死成「永遠走非特權」永遠失敗。
 func TestShouldRetryPrivileged(t *testing.T) {
 	cases := []struct {
 		name string
@@ -21,6 +24,12 @@ func TestShouldRetryPrivileged(t *testing.T) {
 		{"EPERM 字串", errors.New("read icmp: operation not permitted"), true},
 		{"permission denied", errors.New("permission denied"), true},
 		{"Windows access denied", errors.New("Access is denied."), true},
+		{
+			"Windows protocol not configured",
+			errors.New("socket: The requested protocol has not been configured into the system, or no implementation for it exists."),
+			true,
+		},
+		{"Windows no implementation", errors.New("socket: no implementation for it exists"), true},
 		{"一般連線錯誤不回退", errors.New("connection refused"), false},
 		{"逾時不回退", errors.New("i/o timeout"), false},
 	}
