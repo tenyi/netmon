@@ -534,3 +534,47 @@ func TestEventRepoListPageWithCount(t *testing.T) {
 		t.Fatal("invalid status should error")
 	}
 }
+
+// TestStatsRepoListAggregated 驗證 SQL 彙總:加權平均正確,且 LIMIT 取「最新」桶而非最舊。
+func TestStatsRepoListAggregated(t *testing.T) {
+	t.Parallel()
+	repo := setupStatsDB(t)
+	ctx := context.Background()
+
+	const hour = int64(3_600_000)
+	base := (time.Now().Truncate(time.Hour).UnixMilli() / hour) * hour
+	// 3 個小時桶,每小時 2 筆 1 分鐘 bucket;第 0 小時兩筆權重不同以驗證加權
+	rows := []Stat{
+		{BucketStart: base, LatencyAvgMs: 10, LossPct: 0, SampleCount: 30},
+		{BucketStart: base + 60_000, LatencyAvgMs: 40, LossPct: 100, SampleCount: 10},
+		{BucketStart: base + hour, LatencyAvgMs: 20, LossPct: 0, SampleCount: 10},
+		{BucketStart: base + hour + 60_000, LatencyAvgMs: 20, LossPct: 0, SampleCount: 10},
+		{BucketStart: base + 2*hour, LatencyAvgMs: 50, LossPct: 0, SampleCount: 10},
+	}
+	for _, s := range rows {
+		if err := repo.Upsert(ctx, s); err != nil {
+			t.Fatalf("Upsert: %v", err)
+		}
+	}
+
+	got, err := repo.ListAggregated(ctx, 0, base+10*hour, hour, 0)
+	if err != nil {
+		t.Fatalf("ListAggregated: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 buckets, got %d", len(got))
+	}
+	// (10*30+40*10)/40 = 17.5;loss (0*30+100*10)/40 = 25
+	if got[0].BucketStart != base || got[0].LatencyAvgMs != 17.5 || got[0].LossPct != 25 || got[0].SampleCount != 40 {
+		t.Fatalf("bucket0 加權結果錯誤: %+v", got[0])
+	}
+
+	// limit=2:必須保留最新 2 桶,並依時間升冪
+	latest, err := repo.ListAggregated(ctx, 0, base+10*hour, hour, 2)
+	if err != nil {
+		t.Fatalf("ListAggregated(2): %v", err)
+	}
+	if len(latest) != 2 || latest[0].BucketStart != base+hour || latest[1].BucketStart != base+2*hour {
+		t.Fatalf("limit 應保留最新桶: %+v", latest)
+	}
+}

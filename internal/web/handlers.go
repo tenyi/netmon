@@ -141,20 +141,21 @@ func (h *handler) apiStats(c *gin.Context) {
 		limit = n
 	}
 
-	stats, err := h.deps.Stats.List(c.Request.Context(), from, to, limit)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "查詢統計失敗"})
-		return
-	}
-
-	granularity := c.Query("granularity")
-	if granularity != "" {
+	// granularity 有值時在 SQL 內先彙總再 LIMIT,長區間才不會漏掉最新資料
+	var granMs int64
+	if granularity := c.Query("granularity"); granularity != "" {
 		d, err := time.ParseDuration(granularity)
 		if err != nil || d <= 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "granularity 格式無效"})
 			return
 		}
-		stats = aggregateStats(stats, d)
+		granMs = d.Milliseconds()
+	}
+
+	stats, err := h.deps.Stats.ListAggregated(c.Request.Context(), from, to, granMs, limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查詢統計失敗"})
+		return
 	}
 
 	c.JSON(http.StatusOK, stats)
@@ -193,56 +194,4 @@ func (e paramError) Error() string {
 
 func errInvalidParam(name string) error {
 	return paramError(name)
-}
-
-func aggregateStats(stats []storage.Stat, granularity time.Duration) []storage.Stat {
-	if len(stats) == 0 {
-		return stats
-	}
-
-	granMs := granularity.Milliseconds()
-	if granMs <= 0 {
-		return stats
-	}
-
-	type bucket struct {
-		start        int64
-		latencySum   float64
-		lossWeighted float64
-		samples      int
-	}
-
-	buckets := make(map[int64]*bucket)
-	order := make([]int64, 0)
-
-	for _, s := range stats {
-		key := (s.BucketStart / granMs) * granMs
-		b, ok := buckets[key]
-		if !ok {
-			b = &bucket{start: key}
-			buckets[key] = b
-			order = append(order, key)
-		}
-		b.latencySum += s.LatencyAvgMs * float64(s.SampleCount)
-		b.lossWeighted += s.LossPct * float64(s.SampleCount)
-		b.samples += s.SampleCount
-	}
-
-	out := make([]storage.Stat, 0, len(order))
-	for _, key := range order {
-		b := buckets[key]
-		avgLatency := 0.0
-		lossPct := 0.0
-		if b.samples > 0 {
-			avgLatency = b.latencySum / float64(b.samples)
-			lossPct = b.lossWeighted / float64(b.samples)
-		}
-		out = append(out, storage.Stat{
-			BucketStart:  b.start,
-			LatencyAvgMs: avgLatency,
-			LossPct:      lossPct,
-			SampleCount:  b.samples,
-		})
-	}
-	return out
 }
