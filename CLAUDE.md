@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 技術堆疊 (已固定於 `go.mod`)
 
-- **Web**: `gin-gonic/gin` v1.12.0,前端用 `html/template` 渲染 + vanilla JS + Chart.js (CDN,jsdelivr)
+- **Web**: `gin-gonic/gin` v1.12.0,前端用 `html/template` 渲染 + vanilla JS + Chart.js (vendored v4.4.7,`go:embed`,無 CDN)
 - **ICMP**: `golang.org/x/net/icmp` (官方標準庫;privileged 走 raw socket,非特權走 UDP datagram,自動 fallback)
 - **SQLite**: `glebarez/go-sqlite` v1.22.0 (純 Go,`CGO_ENABLED=0` 編譯)
 - **CLI**: `spf13/cobra` v1.10.2
@@ -26,6 +26,7 @@ go vet ./...
 gofmt -s -w .
 
 cd internal\web\static; npm test   # 前端 JS 測試 (node --test, 零外部依賴)
+node --test internal/web/kpi.test.js   # 舊版 internal/web/kpi.test.js (npm test 不會跑到)
 
 # 跨平台 release
 $env:GOOS="linux";   $env:GOARCH="amd64"; go build -o dist/netmon-linux-amd64 .
@@ -60,7 +61,7 @@ netmon/
 │   │   └── storage_test.go      # 用 :memory: 測試三個 repo + cleanup
 │   └── web/
 │       ├── server.go            # embed.FS (templates + static)、路由註冊
-│       ├── handlers.go          # HTML render + 3 個 API + aggregateStats()
+│       ├── handlers.go          # HTML render + 3 個 API
 │       ├── templates/           # dashboard.html / events.html (含 {{define}})
 │       └── static/
 │           ├── app.css / chart.min.js / CHARTJS.LICENSE
@@ -92,7 +93,7 @@ GATEWAY_IP=192.168.1.1
 PING_INTERVAL=1s           # 預設 1s
 PING_TIMEOUT=2s            # 預設 2s,給 icmp socket 的 read deadline
 STATS_INTERVAL=1m          # 預設 1m,stats bucket 大小
-WEB_ADDR=:8080
+WEB_ADDR=127.0.0.1:8080   # 預設只綁本機;服務無認證,要對外需明確設 :8080
 DB_PATH=./data/netmon.db
 RETENTION_DAYS=30          # 至少 1
 ```
@@ -121,8 +122,8 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 | `GET /` | 渲染 `dashboard.html` |
 | `GET /events` | 渲染 `events.html` |
 | `GET /api/status` | 即時狀態 JSON (`Status` struct) |
-| `GET /api/events?from=&to=&limit=&offset=` | 事件 JSON;**預設範圍為過去 24 小時**。`limit > 0` 啟用分頁(上限 200),回應加 `X-Total-Count` header;`limit` 未帶或為 0 時回傳全部(供 dashboard KPI 計算) |
-| `GET /api/stats?from=&to=&granularity=` | 統計 JSON;**預設範圍為過去 1 小時**;`granularity` 為合法 `time.ParseDuration` 時,做 in-memory 加權平均彙總 (`aggregateStats()`) |
+| `GET /api/events?from=&to=&limit=&offset=&status=` | 事件 JSON;**預設範圍為過去 24 小時**。`status` 為 `all` / `ongoing` / `resolved`,其他值回 400。`limit > 0` 啟用分頁(上限 200),回應加 `X-Total-Count` header;`limit` 未帶或為 0 時回傳全部(供 dashboard KPI 計算) |
+| `GET /api/stats?from=&to=&granularity=` | 統計 JSON;**預設範圍為過去 1 小時**;`granularity` 為合法 `time.ParseDuration` 時,由 `StatsRepo.ListAggregated` 在 SQL 內依 `sample_count` 加權彙總,**先彙總再 LIMIT**。回傳上限預設 1024 桶 (`?limit=N` 可調),超出時保留最新的桶 |
 | `GET /static/*` | `http.FS` 服務 `static/` 子樹 |
 
 前端:
@@ -130,13 +131,13 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 - `kpi.js` 是前端共用純函式模組 (IIFE + dual-mode `module.exports` + `window.__netmonKpi`),提供 `latencyKpi` / `longestDisconnection` / `makeGuardedFetch` / `buildSummaryItem`。Node 測試用 `createRequire(import.meta.url)` 載入。
 - `range.js` 提供共用的日期區間選擇器,透過 `netmon:rangechange` CustomEvent 通知;選擇同步到 URL query string 與 sessionStorage。
 - `dashboard.js` 每 **5 秒**輪詢 `/api/status` 更新即時狀態 (透過 `makeGuardedFetch` 防止並發重疊);區間資料於日期 chip 變更時重抓 `/api/events` (無 limit,算 KPI) + `/api/stats`,用 Chart.js 畫 latency / loss 兩張折線圖,並依區間自動挑 `granularity` (≤ 6h 無 / ≤ 1d 5m / ≤ 3d 15m / ≤ 7d 1h / 其他 4h)。longest event KPI 用 `longestDisconnection` 過濾 clock skew。
-- `events.js` 監聽日期 chip + 狀態 chip;抓 `/api/events?limit=25&offset=...` (前端每頁 25 筆),從 `X-Total-Count` 讀總數;**總筆數 < 25 時隱藏分頁器**;切換日期區間時自動回到第 1 頁;summary 區段用 `buildSummaryItem` + `textContent`/`createElement` 而非 `innerHTML`。
+- `events.js` 監聽日期 chip + 狀態 chip;抓 `/api/events?limit=25&offset=...` (前端每頁 25 筆),從 `X-Total-Count` 讀總數;**總筆數 ≤ 25 (僅一頁) 時隱藏分頁器**;切換日期區間時自動回到第 1 頁;summary 區段用 `buildSummaryItem` + `textContent`/`createElement` 而非 `innerHTML`。
 - `events.js` 抬頭右側有「自動更新」開關 (預設 ON),啟用時每 5 秒重抓 events + `/api/status`;偏好持久到 `localStorage["netmon:autoRefresh:events"]`,重整保留;卡片底部顯示「最後更新:N 秒前」並在超過 3 個週期未更新時變琥珀色提示過時。
 - 模板用 `html/template` + `gin.H` 注入 `Title`、`ActiveNav`。Template 檔案內容用 `{{define "dashboard.html"}}...{{end}}` 包裹,以便 `template.ParseFS` 載入。`events.html` 需在 `events.js` 之前載入 `kpi.js` 才能用 `window.__netmonKpi`。
 
 ## 跨平台注意事項
 
-- **ICMP 需要管理員權限**: Windows / Linux / macOS 開 raw socket 都需 admin/root;若未具備,`ICMPPinger` 仍會跑但 `ping.Run()` 會回錯,`monitor` 只 log 不終止 (Web 仍可開)。
+- **ICMP 權限**: `ICMPPinger.Ping` 先試非特權 UDP ICMP (`udp4`),遇 `shouldRetryPrivileged` 判定的錯誤 (含 Windows 無 UDP ICMP 路徑) 回退 raw socket (`ip4:icmp`,需 admin/root) 並記住結果。兩者皆失敗時 `monitor` 只 log 不終止 (Web 仍可開)。
 - **維持 `CGO_ENABLED=0`**: 不要換成 `mattn/go-sqlite` 等 CGo driver。
 - **路徑**: 一律 `filepath.Join`/`filepath.Dir`,`storage.Open` 會自動 `MkdirAll` 父目錄 (`:memory:` 除外)。
 - **時間格式**: DB 與 API 一律存 unix ms (int64),前端 `new Date(ms).toLocaleString("zh-TW")`。不要在後端做時區字串轉換。

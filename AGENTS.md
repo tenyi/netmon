@@ -9,7 +9,7 @@ Always reply in zh-TW.
 
 ## 技術堆疊 (已固定於 `go.mod`)
 
-- **Web**: `gin-gonic/gin` v1.12.0,前端用 `html/template` 渲染 + vanilla JS + Chart.js (vendor embed v4.4.7,免 CDN)
+- **Web**: `gin-gonic/gin` v1.12.0,前端用 `html/template` 渲染 + vanilla JS + Chart.js (vendored v4.4.7,`go:embed`,無 CDN)
 - **ICMP**: `golang.org/x/net/icmp` (官方標準庫;privileged 走 raw socket,非特權走 UDP datagram,自動 fallback)
 - **SQLite**: `glebarez/go-sqlite` v1.22.0 (純 Go,`CGO_ENABLED=0` 編譯)
 - **CLI**: `spf13/cobra` v1.10.2
@@ -27,6 +27,7 @@ go vet ./...
 gofmt -s -w .
 
 cd internal\web\static; npm test   # 前端 JS 測試 (node --test, 零外部依賴)
+node --test internal/web/kpi.test.js   # 舊版 internal/web/kpi.test.js (npm test 不會跑到)
 
 # 跨平台 release
 $env:GOOS="linux";   $env:GOARCH="amd64"; go build -o dist/netmon-linux-amd64 .
@@ -61,9 +62,13 @@ netmon/
 │   │   └── storage_test.go      # 用 :memory: 測試三個 repo + cleanup
 │   └── web/
 │       ├── server.go            # embed.FS (templates + static)、路由註冊
-│       ├── handlers.go          # HTML render + 3 個 API + aggregateStats()
+│       ├── handlers.go          # HTML render + 3 個 API
 │       ├── templates/           # dashboard.html / events.html (含 {{define}})
-│       └── static/              # app.css / dashboard.js / events.js
+│       └── static/
+│           ├── app.css / chart.min.js / CHARTJS.LICENSE
+│           ├── range.js / kpi.js / dashboard.js / events.js
+│           ├── package.json     # Node 測試設定 (npm test → node --test)
+│           └── tests/           # *.spec.test.mjs (前端 helper 規範測試)
 ├── .env.example                 # 範本 (commit);.env 已 gitignore
 ├── data/                        # SQLite 輸出目錄 (gitignore,保留 .gitkeep)
 ├── go.mod / go.sum
@@ -89,7 +94,7 @@ GATEWAY_IP=192.168.1.1
 PING_INTERVAL=1s           # 預設 1s
 PING_TIMEOUT=2s            # 預設 2s,給 icmp socket 的 read deadline
 STATS_INTERVAL=1m          # 預設 1m,stats bucket 大小
-WEB_ADDR=127.0.0.1:8080   # 預設 127.0.0.1:8080 (只綁本機)
+WEB_ADDR=127.0.0.1:8080   # 預設只綁本機;服務無認證,要對外需明確設 :8080
 DB_PATH=./data/netmon.db
 RETENTION_DAYS=30          # 至少 1
 ```
@@ -118,20 +123,22 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 | `GET /` | 渲染 `dashboard.html` |
 | `GET /events` | 渲染 `events.html` |
 | `GET /api/status` | 即時狀態 JSON (`Status` struct) |
-| `GET /api/events?from=&to=` | 事件 JSON;**預設範圍為過去 24 小時** |
-| `GET /api/stats?from=&to=&granularity=` | 統計 JSON;**預設範圍為過去 1 小時**;`granularity` 為合法 `time.ParseDuration` 時,做 in-memory 加權平均彙總 (`aggregateStats()`) |
+| `GET /api/events?from=&to=&limit=&offset=&status=` | 事件 JSON;**預設範圍為過去 24 小時**。`status` 為 `all` / `ongoing` / `resolved`,其他值回 400。`limit > 0` 啟用分頁(上限 200),回應加 `X-Total-Count` header;`limit` 未帶或為 0 時回傳全部(供 dashboard KPI 計算) |
+| `GET /api/stats?from=&to=&granularity=` | 統計 JSON;**預設範圍為過去 1 小時**;`granularity` 為合法 `time.ParseDuration` 時,由 `StatsRepo.ListAggregated` 在 SQL 內依 `sample_count` 加權彙總,**先彙總再 LIMIT**。回傳上限預設 1024 桶 (`?limit=N` 可調),超出時保留最新的桶 |
 | `GET /static/*` | `http.FS` 服務 `static/` 子樹 |
 
 前端:
-- **Chart.js 本地嵌入** (vendor v4.4.7,由 `go:embed` 打包),完全支援離線/內網環境。
+- **Chart.js 已 vendored** (`internal/web/static/chart.min.js` v4.4.7),透過 `go:embed` 打包,完全離線部署,無 CDN 依賴。
 - `kpi.js` 是前端共用純函式模組 (IIFE + dual-mode `module.exports` + `window.__netmonKpi`),提供 `latencyKpi` / `longestDisconnection` / `makeGuardedFetch` / `buildSummaryItem`。Node 測試用 `createRequire(import.meta.url)` 載入。
-- `dashboard.js` 每 **5 秒**輪詢 `/api/status` 更新即時狀態 (透過 `makeGuardedFetch` 防止並發重疊);區間資料於日期 chip 變更時重抓 `/api/events` + `/api/stats`,用 Chart.js 畫 latency / loss 兩張折線圖。longest event KPI 用 `longestDisconnection` 過濾 clock skew。
-- `events.js` 監聽日期 chip + 狀態 chip;summary 區段用 `buildSummaryItem` + `textContent`/`createElement` 而非 `innerHTML`。
+- `range.js` 提供共用的日期區間選擇器,透過 `netmon:rangechange` CustomEvent 通知;選擇同步到 URL query string 與 sessionStorage。
+- `dashboard.js` 每 **5 秒**輪詢 `/api/status` 更新即時狀態 (透過 `makeGuardedFetch` 防止並發重疊);區間資料於日期 chip 變更時重抓 `/api/events` (無 limit,算 KPI) + `/api/stats`,用 Chart.js 畫 latency / loss 兩張折線圖,並依區間自動挑 `granularity` (≤ 6h 無 / ≤ 1d 5m / ≤ 3d 15m / ≤ 7d 1h / 其他 4h)。longest event KPI 用 `longestDisconnection` 過濾 clock skew。
+- `events.js` 監聽日期 chip + 狀態 chip;抓 `/api/events?limit=25&offset=...` (前端每頁 25 筆),從 `X-Total-Count` 讀總數;**總筆數 ≤ 25 (僅一頁) 時隱藏分頁器**;切換日期區間時自動回到第 1 頁;summary 區段用 `buildSummaryItem` + `textContent`/`createElement` 而非 `innerHTML`。
+- `events.js` 抬頭右側有「自動更新」開關 (預設 ON),啟用時每 5 秒重抓 events + `/api/status`;偏好持久到 `localStorage["netmon:autoRefresh:events"]`,重整保留;卡片底部顯示「最後更新:N 秒前」並在超過 3 個週期未更新時變琥珀色提示過時。
 - 模板用 `html/template` + `gin.H` 注入 `Title`、`ActiveNav`。Template 檔案內容用 `{{define "dashboard.html"}}...{{end}}` 包裹,以便 `template.ParseFS` 載入。`events.html` 需在 `events.js` 之前載入 `kpi.js` 才能用 `window.__netmonKpi`。
 
 ## 跨平台注意事項
 
-- **ICMP 支援智慧型探測**: 優先嘗試非特權 UDP ICMP,遭遇權限不足時自動回退至 raw socket (Windows / Linux / macOS 若需 raw socket 仍需 admin/root);若未具備,`monitor` 只 log 不終止 (Web 仍可開)。
+- **ICMP 權限**: `ICMPPinger.Ping` 先試非特權 UDP ICMP (`udp4`),遇 `shouldRetryPrivileged` 判定的錯誤 (含 Windows 無 UDP ICMP 路徑) 回退 raw socket (`ip4:icmp`,需 admin/root) 並記住結果。兩者皆失敗時 `monitor` 只 log 不終止 (Web 仍可開)。
 - **維持 `CGO_ENABLED=0`**: 不要換成 `mattn/go-sqlite` 等 CGo driver。
 - **路徑**: 一律 `filepath.Join`/`filepath.Dir`,`storage.Open` 會自動 `MkdirAll` 父目錄 (`:memory:` 除外)。
 - **時間格式**: DB 與 API 一律存 unix ms (int64),前端 `new Date(ms).toLocaleString("zh-TW")`。不要在後端做時區字串轉換。
@@ -150,6 +157,7 @@ Gin route 都在 `web/server.go` 的 `New()` 註冊:
 ## 已知可改進點 (非緊急)
 
 - `EventRepo.CloseOpen` 用「最新一筆未結束」假設;若要嚴謹的「一對一」事件,需改成 `InsertOpen` 回傳 ID 並由 monitor 持有,`CloseOpen(ctx, id, endedAt)` 才關該筆
+- `EventRepo.List` 與 `ListPage` 各自發 query,若區間內事件量爆大(> 數萬筆)且前端要算 KPI,目前 dashboard 會拉回全部,可能拖累。可改成「`List` 加 max 限制 + 額外 `Summary` API 提供 count / longest / avg」兩個端點
 - `ICMPPinger.Ping` 每次新建 `icmp.ListenPacket`,若要降到秒級以下的高頻監控,可改為長連線並改用非同步 ReadFrom
 - `cmd/serve.go` 同時掛在 root 與 `serve` subcommand,輸出 `cobra` help 時 `netmon -h` 與 `netmon serve -h` 行為不完全一致
-- `dashboard.js` 內 inline 純函式 (e.g. longest 計算) 應優先抽出到 `kpi.js` 集中測試
+- `dashboard.js` 內 inline 純函式 (e.g. longest 計算) 應優先抽出到 `kpi.js` 集中測試,目前仍有少數 DOM-coupled 邏輯 (e.g. `formatBucketLabels`) 未抽
